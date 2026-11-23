@@ -280,6 +280,58 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
+    function isValidUserPresence(data, uid) {
+      return data.keys().hasAll(['uid', 'displayName', 'avatarUrl', 'status', 'lastSeenAt'])
+        && data.keys().hasOnly(['uid', 'displayName', 'avatarUrl', 'status', 'lastSeenAt'])
+        && data.uid == uid
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 40
+        && data.avatarUrl is string && data.avatarUrl.size() <= 1000
+        && data.status in ['online', 'idle', 'dnd', 'offline']
+        && data.lastSeenAt is timestamp;
+    }
+
+    function isValidVoiceParticipant(data, participantId) {
+      return data.keys().hasAll(['id', 'channelId', 'uid', 'displayName', 'username', 'avatarUrl', 'muted', 'deafened', 'cameraOn', 'screenSharing', 'speaking', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'channelId', 'uid', 'displayName', 'username', 'avatarUrl', 'muted', 'deafened', 'cameraOn', 'screenSharing', 'speaking', 'updatedAt'])
+        && data.id == participantId && isValidId(data.id)
+        && data.channelId is string && data.channelId.size() >= 1 && data.channelId.size() <= 128
+        && data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 40
+        && data.username is string && data.username.size() >= 2 && data.username.size() <= 32
+        && data.avatarUrl is string && data.avatarUrl.size() <= 1000
+        && data.muted is bool
+        && data.deafened is bool
+        && data.cameraOn is bool
+        && data.screenSharing is bool
+        && data.speaking is bool
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidVoiceSignal(data, signalId) {
+      return data.keys().hasAll(['id', 'roomKey', 'fromUid', 'targetUid', 'type', 'payload', 'createdAt'])
+        && data.keys().hasOnly(['id', 'roomKey', 'fromUid', 'targetUid', 'type', 'payload', 'createdAt'])
+        && data.id == signalId && isValidId(data.id)
+        && data.roomKey is string && data.roomKey.size() >= 1 && data.roomKey.size() <= 160
+        && data.fromUid is string && data.fromUid.size() >= 1 && data.fromUid.size() <= 128
+        && data.targetUid is string && data.targetUid.size() >= 1 && data.targetUid.size() <= 128
+        && data.type in ['offer', 'answer', 'ice']
+        && data.payload is string && data.payload.size() <= 20000
+        && data.createdAt is timestamp;
+    }
+
+    function isValidIncomingCall(data, callId) {
+      return data.keys().hasAll(['id', 'fromUid', 'fromName', 'fromAvatar', 'roomKey', 'video', 'status', 'createdAt'])
+        && data.keys().hasOnly(['id', 'fromUid', 'fromName', 'fromAvatar', 'roomKey', 'video', 'status', 'createdAt'])
+        && data.id == callId && isValidId(data.id)
+        && data.fromUid is string && data.fromUid.size() >= 1 && data.fromUid.size() <= 128
+        && data.fromName is string && data.fromName.size() >= 1 && data.fromName.size() <= 40
+        && data.fromAvatar is string && data.fromAvatar.size() <= 1000
+        && data.roomKey is string && data.roomKey.size() >= 1 && data.roomKey.size() <= 160
+        && data.video is bool
+        && data.status in ['ringing', 'declined']
+        && data.createdAt is timestamp;
+    }
+
     // --- Collection Rules ---
 
     // 1. Public User Profiles, Private PII, Notes, Bookmarks, Notifications
@@ -336,6 +388,18 @@ service cloud.firestore {
         allow delete: if isOwner(userId) && isValidId(notifId);
       }
 
+      match /incomingCalls/{callId} {
+        allow get: if isOwner(userId) && isValidId(callId);
+        allow list: if isOwner(userId);
+        allow create: if isSignedIn() && isValidId(callId) && isValidIncomingCall(incoming(), callId)
+          && incoming().fromUid == request.auth.uid && incoming().createdAt == request.time;
+        allow update: if isSignedIn() && isValidId(callId) && isValidIncomingCall(incoming(), callId)
+          && (isOwner(userId) || existing().fromUid == request.auth.uid)
+          && incoming().id == existing().id && incoming().fromUid == existing().fromUid && incoming().createdAt == existing().createdAt
+          && incoming().diff(existing()).affectedKeys().hasOnly(['status']);
+        allow delete: if isSignedIn() && isValidId(callId) && (isOwner(userId) || existing().fromUid == request.auth.uid);
+      }
+
       match /memberships/{serverId} {
         allow get: if isOwner(userId) && isValidId(serverId);
         allow list: if isOwner(userId);
@@ -349,6 +413,15 @@ service cloud.firestore {
           && incoming().diff(existing()).affectedKeys().hasOnly(['serverName', 'serverIcon', 'serverColor', 'role']);
         allow delete: if isOwner(userId) || isServerAdmin(serverId);
       }
+    }
+
+    // 1b. Live Online Presence Heartbeats
+    match /presence/{userId} {
+      allow get: if isSignedIn() && isValidId(userId);
+      allow list: if isSignedIn() && existing().status in ['online', 'idle', 'dnd'];
+      allow create, update: if isOwner(userId) && isValidId(userId) && isValidUserPresence(incoming(), userId)
+        && incoming().lastSeenAt == request.time;
+      allow delete: if isOwner(userId) && isValidId(userId);
     }
 
     // 2. Username lookup table (exact lookup only, no list scraping)
@@ -462,6 +535,30 @@ service cloud.firestore {
             && (isOwner(existing().authorId) || isServerMod(serverId));
         }
       }
+
+      match /voiceParticipants/{participantId} {
+        allow get: if isValidId(serverId) && isValidId(participantId) && isServerMember(serverId);
+        allow list: if isServerMember(serverId);
+        allow create, update: if isServerMember(serverId) && isValidId(serverId) && isValidId(participantId)
+          && isValidVoiceParticipant(incoming(), participantId)
+          && incoming().uid == request.auth.uid
+          && incoming().updatedAt == request.time;
+        allow delete: if isServerMember(serverId) && isValidId(serverId) && isValidId(participantId)
+          && existing().uid == request.auth.uid;
+      }
+
+      match /voiceSignals/{signalId} {
+        allow get: if isValidId(serverId) && isValidId(signalId) && isServerMember(serverId)
+          && (existing().targetUid == request.auth.uid || existing().fromUid == request.auth.uid);
+        allow list: if isServerMember(serverId) && existing().targetUid == request.auth.uid;
+        allow create: if isServerMember(serverId) && isValidId(serverId) && isValidId(signalId)
+          && isValidVoiceSignal(incoming(), signalId)
+          && incoming().fromUid == request.auth.uid
+          && incoming().createdAt == request.time;
+        allow update: if false;
+        allow delete: if isServerMember(serverId) && isValidId(serverId) && isValidId(signalId)
+          && (existing().targetUid == request.auth.uid || existing().fromUid == request.auth.uid);
+      }
     }
 
     // 4. Invites
@@ -541,6 +638,30 @@ service cloud.firestore {
           isOwner(existing().authorId) ||
           (existing().authorId in ['turcord_bot', 'mod_bot', 'music_bot'] && isDmParticipant(threadId))
         );
+      }
+
+      match /voiceParticipants/{participantId} {
+        allow get: if isValidId(threadId) && isValidId(participantId) && isDmParticipant(threadId);
+        allow list: if isDmParticipant(threadId);
+        allow create, update: if isDmParticipant(threadId) && isValidId(threadId) && isValidId(participantId)
+          && isValidVoiceParticipant(incoming(), participantId)
+          && incoming().uid == request.auth.uid
+          && incoming().updatedAt == request.time;
+        allow delete: if isDmParticipant(threadId) && isValidId(threadId) && isValidId(participantId)
+          && existing().uid == request.auth.uid;
+      }
+
+      match /voiceSignals/{signalId} {
+        allow get: if isValidId(threadId) && isValidId(signalId) && isDmParticipant(threadId)
+          && (existing().targetUid == request.auth.uid || existing().fromUid == request.auth.uid);
+        allow list: if isDmParticipant(threadId) && existing().targetUid == request.auth.uid;
+        allow create: if isDmParticipant(threadId) && isValidId(threadId) && isValidId(signalId)
+          && isValidVoiceSignal(incoming(), signalId)
+          && incoming().fromUid == request.auth.uid
+          && incoming().createdAt == request.time;
+        allow update: if false;
+        allow delete: if isDmParticipant(threadId) && isValidId(threadId) && isValidId(signalId)
+          && (existing().targetUid == request.auth.uid || existing().fromUid == request.auth.uid);
       }
     }
   }

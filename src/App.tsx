@@ -1022,11 +1022,11 @@ function HalkaApp() {
             <button
               onClick={() => {
                 const call = rt.incomingCall!;
-                rt.setIncomingCall(null);
+                void rt.clearIncomingCallDoc(call.fromUid);
                 const threadId = call.roomKey.replace(/^dm:/, '');
                 setActiveView('home');
                 setActiveDmThreadId(threadId);
-                rt.joinVoice(call.roomKey, `${call.fromName} ile Arama`, call.video);
+                void rt.joinVoice(call.roomKey, `${call.fromName} ile Arama`, call.video);
               }}
               className="flex items-center justify-center gap-1.5 py-2 rounded-lg bg-[#23A55A] hover:bg-[#1E8E4C] text-white text-xs font-medium cursor-pointer"
             >
@@ -1180,7 +1180,7 @@ function HalkaApp() {
           onRunDiagnostics={runBotDiagnostics}
           onSave={(updates) => updateUserProfile(profile.uid, profile.username, updates)}
           onSignOut={async () => {
-            rt.leaveVoice();
+            await rt.cleanupForSignOut();
             await signOut(auth);
             setUserSettingsOpen(false);
           }}

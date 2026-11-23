@@ -300,7 +300,7 @@ export const ChannelSidebar: React.FC<ChannelSidebarProps> = ({
           <div className="flex items-center justify-between">
             <div className="min-w-0">
               <div className="flex items-center gap-1.5 text-xs font-semibold text-[#23A55A]">
-                <span className={`w-2 h-2 rounded-full ${wsConnected ? 'bg-[#23A55A]' : 'bg-amber-400'}`} />
+                <span className={`w-2 h-2 rounded-full ${wsConnected || activeVoiceRoomKey ? 'bg-[#23A55A]' : 'bg-amber-400'}`} />
                 <span>Ses Bağlantısı Kuruldu</span>
               </div>
               <p className="text-[11px] text-[var(--text-secondary)] truncate">{activeVoiceLabel}</p>

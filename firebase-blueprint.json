@@ -269,6 +269,70 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["id", "threadId", "authorId", "authorName", "authorAvatar", "content", "attachmentUrl", "attachmentName", "replyToId", "replyToAuthor", "replyToContent", "reactions", "edited", "createdAt", "updatedAt"]
+    },
+    "UserPresence": {
+      "title": "UserPresence",
+      "description": "Live online status heartbeat for users across static and server deployments.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "avatarUrl": { "type": "string", "maxLength": 1000 },
+        "status": { "type": "string", "enum": ["online", "idle", "dnd", "offline"] },
+        "lastSeenAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "displayName", "avatarUrl", "status", "lastSeenAt"]
+    },
+    "VoiceParticipant": {
+      "title": "VoiceParticipant",
+      "description": "Active participant in a server voice channel or DM call.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "channelId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "username": { "type": "string", "minLength": 2, "maxLength": 32 },
+        "avatarUrl": { "type": "string", "maxLength": 1000 },
+        "muted": { "type": "boolean" },
+        "deafened": { "type": "boolean" },
+        "cameraOn": { "type": "boolean" },
+        "screenSharing": { "type": "boolean" },
+        "speaking": { "type": "boolean" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "channelId", "uid", "displayName", "username", "avatarUrl", "muted", "deafened", "cameraOn", "screenSharing", "speaking", "updatedAt"]
+    },
+    "VoiceSignal": {
+      "title": "VoiceSignal",
+      "description": "Ephemeral WebRTC signaling message (offer, answer, ice candidate).",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "roomKey": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "fromUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "targetUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "type": { "type": "string", "enum": ["offer", "answer", "ice"] },
+        "payload": { "type": "string", "maxLength": 20000 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "roomKey", "fromUid", "targetUid", "type", "payload", "createdAt"]
+    },
+    "IncomingCall": {
+      "title": "IncomingCall",
+      "description": "Incoming DM audio/video call ring notification.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "fromUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "fromName": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "fromAvatar": { "type": "string", "maxLength": 1000 },
+        "roomKey": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "video": { "type": "boolean" },
+        "status": { "type": "string", "enum": ["ringing", "declined"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "fromUid", "fromName", "fromAvatar", "roomKey", "video", "status", "createdAt"]
     }
   },
   "firestore": {
@@ -292,9 +356,17 @@
       "schema": { "$ref": "#/entities/UserNotification" },
       "description": "User notification inbox."
     },
+    "/users/{userId}/incomingCalls/{callId}": {
+      "schema": { "$ref": "#/entities/IncomingCall" },
+      "description": "Incoming DM call rings."
+    },
     "/users/{userId}/memberships/{serverId}": {
       "schema": { "$ref": "#/entities/UserMembership" },
       "description": "User's personal index of joined servers."
+    },
+    "/presence/{userId}": {
+      "schema": { "$ref": "#/entities/UserPresence" },
+      "description": "Real-time online presence heartbeat documents."
     },
     "/usernames/{username}": {
       "schema": { "$ref": "#/entities/UsernameClaim" },
@@ -320,6 +392,14 @@
       "schema": { "$ref": "#/entities/ChannelMessage" },
       "description": "Messages in a server channel."
     },
+    "/servers/{serverId}/voiceParticipants/{participantId}": {
+      "schema": { "$ref": "#/entities/VoiceParticipant" },
+      "description": "Active participants in server voice channels."
+    },
+    "/servers/{serverId}/voiceSignals/{signalId}": {
+      "schema": { "$ref": "#/entities/VoiceSignal" },
+      "description": "WebRTC signaling messages for server voice channels."
+    },
     "/friendRequests/{requestId}": {
       "schema": { "$ref": "#/entities/FriendRequest" },
       "description": "Friend requests and active friendships."
@@ -331,6 +411,14 @@
     "/dmThreads/{threadId}/messages/{messageId}": {
       "schema": { "$ref": "#/entities/DmMessage" },
       "description": "Messages in a DM or Group DM thread."
+    },
+    "/dmThreads/{threadId}/voiceParticipants/{participantId}": {
+      "schema": { "$ref": "#/entities/VoiceParticipant" },
+      "description": "Active participants in DM voice/video calls."
+    },
+    "/dmThreads/{threadId}/voiceSignals/{signalId}": {
+      "schema": { "$ref": "#/entities/VoiceSignal" },
+      "description": "WebRTC signaling messages for DM voice/video calls."
     }
   }
 }
