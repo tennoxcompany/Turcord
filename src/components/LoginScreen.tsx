@@ -20,74 +20,35 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onGoogleLogin, error }
   };
 
   return (
-    <div className="min-h-screen w-full bg-[#111214] text-[#F2F3F5] flex flex-col lg:flex-row">
+    <div className="h-dvh w-full overflow-y-auto lg:overflow-hidden bg-[#111214] text-[#F2F3F5] flex flex-col lg:flex-row">
       {/* Left Column: Auth & Value Prop */}
-      <div className="flex-1 flex flex-col justify-between p-8 sm:p-12 lg:p-16 max-w-2xl mx-auto lg:mx-0">
-        <div className="flex items-center justify-between">
-          <span className="font-display text-2xl font-bold tracking-tight text-white">Turcord</span>
-          <span className="text-xs text-[#949BA4]">Sesli &amp; Yazılı Topluluk Platformu</span>
+      <div className="flex-1 lg:h-full lg:overflow-y-auto flex flex-col justify-between px-6 py-5 sm:px-10 sm:py-7 lg:px-12 lg:py-8 max-w-2xl w-full mx-auto lg:mx-0">
+        <div className="flex items-center justify-between gap-3 shrink-0">
+          <span className="font-display text-xl sm:text-2xl font-bold tracking-tight text-white">Turcord</span>
+          <span className="text-[11px] sm:text-xs text-[#949BA4] text-right">Sesli &amp; Yazılı Topluluk Platformu</span>
         </div>
 
-        <div className="my-12 space-y-8">
-          <div className="space-y-4">
-            <h1 className="font-display text-4xl sm:text-5xl font-bold tracking-tight text-white leading-[1.12] text-balance">
+        <div className="my-auto py-4 sm:py-5 space-y-5">
+          <div className="space-y-2.5">
+            <h1 className="font-display text-3xl sm:text-4xl xl:text-[42px] font-bold tracking-tight text-white leading-[1.12] text-balance">
               Arkadaşlarınla kesintisiz konuş, sunucunu kur.
             </h1>
-            <p className="text-base text-[#B5BAC1] leading-relaxed max-w-lg">
+            <p className="text-sm sm:text-[15px] text-[#B5BAC1] leading-relaxed max-w-lg">
               Sesli odalar, ekran paylaşımı, metin kanalları, roller ve direkt mesajlar tek bir hızlı arayüzde. Erişim engeli olmadan tarayıcıdan anında bağlan.
             </p>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
-            <div className="p-4 rounded-xl bg-[#1E1F22] border border-[#2B2D31] space-y-1.5">
-              <div className="flex items-center gap-2 text-white font-medium text-sm">
-                <Headphones className="w-4 h-4 text-[#5865F2]" />
-                <span>Düşük Gecikmeli Ses</span>
-              </div>
-              <p className="text-xs text-[#949BA4] leading-relaxed">
-                WebRTC tabanlı sesli kanallar, kamera ve ekran paylaşımı.
-              </p>
-            </div>
-            <div className="p-4 rounded-xl bg-[#1E1F22] border border-[#2B2D31] space-y-1.5">
-              <div className="flex items-center gap-2 text-white font-medium text-sm">
-                <MessageSquare className="w-4 h-4 text-[#23A55A]" />
-                <span>Zengin Metin Kanalları</span>
-              </div>
-              <p className="text-xs text-[#949BA4] leading-relaxed">
-                Yanıtlar, emoji tepkileri, mesaj sabitleme ve canlı yazıyor bilgisi.
-              </p>
-            </div>
-            <div className="p-4 rounded-xl bg-[#1E1F22] border border-[#2B2D31] space-y-1.5">
-              <div className="flex items-center gap-2 text-white font-medium text-sm">
-                <Users className="w-4 h-4 text-[#F0B232]" />
-                <span>Arkadaşlar &amp; DM</span>
-              </div>
-              <p className="text-xs text-[#949BA4] leading-relaxed">
-                Kullanıcı adıyla arkadaş ekle, birebir sohbet ve sesli arama başlat.
-              </p>
-            </div>
-            <div className="p-4 rounded-xl bg-[#1E1F22] border border-[#2B2D31] space-y-1.5">
-              <div className="flex items-center gap-2 text-white font-medium text-sm">
-                <ShieldCheck className="w-4 h-4 text-[#B5BAC1]" />
-                <span>Turcord Bot &amp; Roller</span>
-              </div>
-              <p className="text-xs text-[#949BA4] leading-relaxed">
-                Resmi Turcord botu, slash komutları, moderasyon ve yetki yönetimi.
-              </p>
-            </div>
-          </div>
-
           {error && (
-            <div className="p-3.5 rounded-lg bg-rose-500/10 border border-rose-500/30 text-sm text-rose-300">
+            <div className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/30 text-xs sm:text-sm text-rose-300">
               {error}
             </div>
           )}
 
-          <div className="pt-2">
+          <div>
             <button
               onClick={handleClick}
               disabled={loading}
-              className="inline-flex items-center justify-center gap-3 px-6 py-3.5 rounded-xl bg-[#5865F2] hover:bg-[#4752C4] disabled:opacity-60 text-white font-medium text-base transition-colors cursor-pointer shadow-sm"
+              className="inline-flex items-center justify-center gap-3 px-5 py-3 rounded-xl bg-[#5865F2] hover:bg-[#4752C4] disabled:opacity-60 text-white font-medium text-sm sm:text-base transition-colors cursor-pointer shadow-sm"
             >
               <svg className="w-5 h-5" viewBox="0 0 24 24" aria-hidden="true">
                 <path
@@ -98,9 +59,48 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onGoogleLogin, error }
               <span>{loading ? 'Bağlanıyor...' : 'Google ile Giriş Yap'}</span>
             </button>
           </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 sm:gap-3">
+            <div className="p-3 rounded-xl bg-[#1E1F22] border border-[#2B2D31] space-y-1">
+              <div className="flex items-center gap-2 text-white font-medium text-[13px]">
+                <Headphones className="w-4 h-4 text-[#5865F2] shrink-0" />
+                <span>Düşük Gecikmeli Ses</span>
+              </div>
+              <p className="text-[11px] sm:text-xs text-[#949BA4] leading-snug">
+                WebRTC tabanlı sesli kanallar, kamera ve ekran paylaşımı.
+              </p>
+            </div>
+            <div className="p-3 rounded-xl bg-[#1E1F22] border border-[#2B2D31] space-y-1">
+              <div className="flex items-center gap-2 text-white font-medium text-[13px]">
+                <MessageSquare className="w-4 h-4 text-[#23A55A] shrink-0" />
+                <span>Zengin Metin Kanalları</span>
+              </div>
+              <p className="text-[11px] sm:text-xs text-[#949BA4] leading-snug">
+                Yanıtlar, emoji tepkileri, mesaj sabitleme ve canlı yazıyor bilgisi.
+              </p>
+            </div>
+            <div className="p-3 rounded-xl bg-[#1E1F22] border border-[#2B2D31] space-y-1">
+              <div className="flex items-center gap-2 text-white font-medium text-[13px]">
+                <Users className="w-4 h-4 text-[#F0B232] shrink-0" />
+                <span>Arkadaşlar &amp; DM</span>
+              </div>
+              <p className="text-[11px] sm:text-xs text-[#949BA4] leading-snug">
+                Kullanıcı adıyla arkadaş ekle, birebir sohbet ve sesli arama başlat.
+              </p>
+            </div>
+            <div className="p-3 rounded-xl bg-[#1E1F22] border border-[#2B2D31] space-y-1">
+              <div className="flex items-center gap-2 text-white font-medium text-[13px]">
+                <ShieldCheck className="w-4 h-4 text-[#B5BAC1] shrink-0" />
+                <span>Turcord Bot &amp; Roller</span>
+              </div>
+              <p className="text-[11px] sm:text-xs text-[#949BA4] leading-snug">
+                Resmi Turcord botu, slash komutları, moderasyon ve yetki yönetimi.
+              </p>
+            </div>
+          </div>
         </div>
 
-        <div className="text-xs text-[#80848E] flex items-center gap-2">
+        <div className="text-[11px] text-[#80848E] flex items-center gap-2 shrink-0 pt-2">
           <span>Turcord Topluluk Platformu</span>
           <span aria-hidden="true">·</span>
           <span>Tarayıcıdan Anında Erişim</span>
@@ -108,7 +108,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onGoogleLogin, error }
       </div>
 
       {/* Right Column: Visual Showcase */}
-      <div className="hidden lg:block flex-1 relative overflow-hidden bg-[#18191C] border-l border-[#2B2D31]">
+      <div className="hidden lg:block flex-1 h-full relative overflow-hidden bg-[#18191C] border-l border-[#2B2D31]">
         <img
           src={loginShowcaseImg}
           alt="Turcord sesli ve topluluk iletişim kanalları"
@@ -116,9 +116,9 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onGoogleLogin, error }
           className="w-full h-full object-cover opacity-90"
         />
         <div className="absolute inset-0 bg-gradient-to-t from-[#111214] via-transparent to-[#111214]/40" />
-        <div className="absolute bottom-12 left-12 right-12 max-w-md space-y-2">
+        <div className="absolute bottom-8 left-10 right-10 max-w-md space-y-2">
           <p className="text-xs font-medium text-[#949BA4]">Oda, Kanal &amp; Ses</p>
-          <p className="font-display text-xl font-semibold text-white leading-snug">
+          <p className="font-display text-lg font-semibold text-white leading-snug">
             Kurulum gerektirmez. Sunucunu oluştur, davet kodunu paylaş ve saniyeler içinde sesli odaya geç.
           </p>
         </div>
