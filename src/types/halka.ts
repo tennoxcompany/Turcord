@@ -4,6 +4,7 @@ export type UserStatus = 'online' | 'idle' | 'dnd' | 'offline';
 export type MemberRole = 'owner' | 'admin' | 'moderator' | 'member';
 export type ChannelType = 'text' | 'voice' | 'announcement';
 export type AppearanceTheme = 'oniks' | 'koyu' | 'gece';
+export type BotId = 'turcord_bot' | 'mod_bot' | 'music_bot';
 export type AvatarDecorationId =
   | 'none'
   | 'cyber-ring'
@@ -48,6 +49,9 @@ export interface PublicProfile {
   theme?: AppearanceTheme;
   showTypingIndicator?: boolean;
   mentionNotifs?: boolean;
+  botAlerts?: boolean;
+  compactMode?: boolean;
+  noiseSuppression?: boolean;
   createdAt?: Timestamp;
   updatedAt?: Timestamp;
 }
@@ -92,6 +96,7 @@ export interface ServerDoc {
   isPublic: boolean;
   inviteCode: string;
   memberCount: number;
+  enabledBots?: string[];
   createdAt?: Timestamp;
   updatedAt?: Timestamp;
 }
@@ -150,6 +155,7 @@ export interface ChatMessage {
   reactions: Record<string, string[]>;
   pinned?: boolean;
   edited: boolean;
+  isBot?: boolean;
   createdAt?: Timestamp;
   updatedAt?: Timestamp;
 }
@@ -182,6 +188,7 @@ export interface DmThreadDoc {
     }
   >;
   isGroup?: boolean;
+  isBotThread?: boolean;
   groupName?: string;
   lastMessage: string;
   lastMessageAt?: Timestamp;

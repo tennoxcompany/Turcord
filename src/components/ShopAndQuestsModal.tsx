@@ -27,7 +27,7 @@ const DECORATIONS: Array<{
   { id: 'aurora-orbit', name: 'Kutup Işığı', desc: 'Mor aurora ışık yörüngesi', cost: 750, accent: '#A855F7' },
 ];
 
-const CLAN_TAGS = ['TR', 'CİX', 'DEV', 'GG', 'PRO', 'HALKA'];
+const CLAN_TAGS = ['TR', 'CİX', 'DEV', 'GG', 'PRO', 'TURCORD'];
 
 export const ShopAndQuestsModal: React.FC<ShopAndQuestsModalProps> = ({
   profile,

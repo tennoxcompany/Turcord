@@ -20,6 +20,7 @@ import {
   LIMITS,
   type AppearanceTheme,
   type AvatarDecorationId,
+  type BotId,
   type ChannelDoc,
   type ChannelType,
   type ChatMessage,
@@ -33,6 +34,7 @@ import {
   type UserConnection,
   type UserStatus,
 } from '../types/halka';
+import { getBotThreadId, OFFICIAL_BOTS } from './turcordBots';
 
 export function makeId(prefix = ''): string {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -130,6 +132,9 @@ export async function ensureUserProfile(user: User): Promise<PublicProfile> {
       theme: 'oniks' as AppearanceTheme,
       showTypingIndicator: true,
       mentionNotifs: true,
+      botAlerts: true,
+      compactMode: false,
+      noiseSuppression: true,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     };
@@ -138,7 +143,7 @@ export async function ensureUserProfile(user: User): Promise<PublicProfile> {
     batch.set(doc(db, 'users', user.uid), profilePayload);
     batch.set(doc(db, 'users', user.uid, 'private', 'info'), {
       uid: user.uid,
-      email: (user.email || `${user.uid}@halka.local`).slice(0, 200),
+      email: (user.email || `${user.uid}@turcord.local`).slice(0, 200),
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
@@ -250,6 +255,9 @@ export async function updateUserPreferences(
     theme: AppearanceTheme;
     showTypingIndicator: boolean;
     mentionNotifs: boolean;
+    botAlerts: boolean;
+    compactMode: boolean;
+    noiseSuppression: boolean;
   }>
 ): Promise<void> {
   try {
@@ -321,7 +329,7 @@ export async function sendNotification(
     preview: string;
   }
 ): Promise<void> {
-  if (!targetUid || targetUid === payload.fromUid) return;
+  if (!targetUid || (targetUid === payload.fromUid && payload.type !== 'system')) return;
   const id = makeId('ntf');
   try {
     await setDoc(doc(db, 'users', targetUid, 'notifications', id), {
@@ -385,6 +393,7 @@ export async function createServer(
       isPublic: input.isPublic,
       inviteCode,
       memberCount: 1,
+      enabledBots: ['turcord_bot', 'mod_bot', 'music_bot'],
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
@@ -633,17 +642,22 @@ export async function updateServerSettings(
     iconEmoji: string;
     iconColor: string;
     isPublic: boolean;
+    enabledBots?: string[];
   }
 ): Promise<void> {
   try {
-    await updateDoc(doc(db, 'servers', serverId), {
+    const payload: Record<string, unknown> = {
       name: updates.name.trim().slice(0, LIMITS.SERVER_NAME_MAX),
       description: updates.description.trim().slice(0, LIMITS.SERVER_DESC_MAX),
       iconEmoji: updates.iconEmoji.slice(0, 16),
       iconColor: updates.iconColor.slice(0, 20),
       isPublic: updates.isPublic,
       updatedAt: serverTimestamp(),
-    });
+    };
+    if (updates.enabledBots !== undefined) {
+      payload.enabledBots = updates.enabledBots.slice(0, 10);
+    }
+    await updateDoc(doc(db, 'servers', serverId), payload);
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, `servers/${serverId}`);
   }
@@ -1154,3 +1168,159 @@ export async function fetchServerChannelsOnce(serverId: string): Promise<Channel
     handleFirestoreError(error, OperationType.LIST, `servers/${serverId}/channels`);
   }
 }
+
+// --- Official Turcord Bot Threads, Alerts & Channel Messages ---
+
+export async function ensureTurcordBotThread(profile: PublicProfile): Promise<DmThreadDoc> {
+  const threadId = getBotThreadId(profile.uid);
+  const bot = OFFICIAL_BOTS.turcord_bot;
+  const welcomeText = `Merhaba **${profile.displayName}**! Ben **Turcord** resmi botuyum.\n\nHerhangi bir bağlantı, ses veya mikrofon sorununda sana buradan otomatik bilgi veririm. Ayrıca aklına takılan her şeyi doğrudan bu sohbetten bana sorabilirsin!`;
+
+  try {
+    const ref = doc(db, 'dmThreads', threadId);
+    const snap = await getDoc(ref);
+    if (snap.exists()) {
+      return snap.data() as DmThreadDoc;
+    }
+
+    const threadPayload = {
+      id: threadId,
+      participants: [profile.uid, bot.id],
+      participantProfiles: {
+        [profile.uid]: {
+          displayName: profile.displayName.slice(0, 40),
+          username: profile.username.slice(0, 32),
+          avatarUrl: (profile.avatarUrl || '').slice(0, 1000),
+        },
+        [bot.id]: {
+          displayName: bot.name,
+          username: bot.username,
+          avatarUrl: '',
+        },
+      },
+      isGroup: false,
+      isBotThread: true,
+      groupName: '',
+      lastMessage: welcomeText.slice(0, 200),
+      lastMessageAt: serverTimestamp(),
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    };
+
+    await setDoc(ref, threadPayload);
+    await sendBotDmMessage(threadId, welcomeText, 'turcord_bot');
+
+    return {
+      ...threadPayload,
+      lastMessageAt: undefined,
+      createdAt: undefined,
+      updatedAt: undefined,
+    };
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `dmThreads/${threadId}`);
+  }
+}
+
+export async function sendBotDmMessage(
+  threadId: string,
+  content: string,
+  botId: BotId = 'turcord_bot'
+): Promise<void> {
+  const clean = content.trim().slice(0, LIMITS.MESSAGE_MAX);
+  if (!clean) return;
+  const bot = OFFICIAL_BOTS[botId] || OFFICIAL_BOTS.turcord_bot;
+  const messageId = makeId('dm');
+
+  try {
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'dmThreads', threadId, 'messages', messageId), {
+      id: messageId,
+      threadId,
+      authorId: bot.id,
+      authorName: bot.name,
+      authorAvatar: '',
+      content: clean,
+      attachmentUrl: '',
+      attachmentName: '',
+      replyToId: '',
+      replyToAuthor: '',
+      replyToContent: '',
+      reactions: {},
+      edited: false,
+      isBot: true,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+    batch.update(doc(db, 'dmThreads', threadId), {
+      lastMessage: clean.slice(0, 200),
+      lastMessageAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `dmThreads/${threadId}/messages/${messageId}`);
+  }
+}
+
+export async function sendBotAlertToUser(
+  profile: PublicProfile,
+  title: string,
+  detail: string
+): Promise<void> {
+  if (profile.botAlerts === false) return;
+  try {
+    const thread = await ensureTurcordBotThread(profile);
+    const formatted = `⚠️ **Turcord Sistem Uyarısı — ${title}**\n${detail}\n\n_Çözüm adımları veya test için bana buradan yazabilirsin._`;
+    await sendBotDmMessage(thread.id, formatted, 'turcord_bot');
+    await sendNotification(profile.uid, {
+      type: 'system',
+      fromUid: 'turcord_bot',
+      fromName: 'Turcord Resmi Bot',
+      fromAvatar: '',
+      channelLabel: 'Sistem Bildirimi',
+      preview: `${title}: ${detail}`.slice(0, 300),
+    });
+  } catch {
+    // Non-blocking diagnostic alert
+  }
+}
+
+export async function sendBotChannelMessage(
+  serverId: string,
+  channelId: string,
+  botId: BotId,
+  content: string,
+  replyTo?: ChatMessage | null
+): Promise<void> {
+  const clean = content.trim().slice(0, LIMITS.MESSAGE_MAX);
+  if (!clean) return;
+  const bot = OFFICIAL_BOTS[botId] || OFFICIAL_BOTS.turcord_bot;
+  const messageId = makeId('msg');
+
+  try {
+    await setDoc(doc(db, 'servers', serverId, 'channels', channelId, 'messages', messageId), {
+      id: messageId,
+      serverId,
+      channelId,
+      authorId: bot.id,
+      authorName: bot.name,
+      authorAvatar: '',
+      authorRoleColor: bot.roleColor,
+      content: clean,
+      attachmentUrl: '',
+      attachmentName: '',
+      replyToId: replyTo?.id || '',
+      replyToAuthor: (replyTo?.authorName || '').slice(0, 40),
+      replyToContent: (replyTo?.content || '').slice(0, 200),
+      reactions: {},
+      pinned: false,
+      edited: false,
+      isBot: true,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, `servers/${serverId}/channels/${channelId}/messages/${messageId}`);
+  }
+}
+

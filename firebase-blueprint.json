@@ -20,6 +20,9 @@
         "theme": { "type": "string", "enum": ["oniks", "koyu", "gece"] },
         "showTypingIndicator": { "type": "boolean" },
         "mentionNotifs": { "type": "boolean" },
+        "botAlerts": { "type": "boolean" },
+        "compactMode": { "type": "boolean" },
+        "noiseSuppression": { "type": "boolean" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -120,6 +123,7 @@
         "isPublic": { "type": "boolean" },
         "inviteCode": { "type": "string", "minLength": 4, "maxLength": 24, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "memberCount": { "type": "integer" },
+        "enabledBots": { "type": "array" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -197,6 +201,7 @@
         "reactions": { "type": "object" },
         "pinned": { "type": "boolean" },
         "edited": { "type": "boolean" },
+        "isBot": { "type": "boolean" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -232,6 +237,7 @@
         "participants": { "type": "array" },
         "participantProfiles": { "type": "object" },
         "isGroup": { "type": "boolean" },
+        "isBotThread": { "type": "boolean" },
         "groupName": { "type": "string", "maxLength": 60 },
         "lastMessage": { "type": "string", "maxLength": 200 },
         "lastMessageAt": { "type": "string", "format": "date-time" },
@@ -258,6 +264,7 @@
         "replyToContent": { "type": "string", "maxLength": 200 },
         "reactions": { "type": "object" },
         "edited": { "type": "boolean" },
+        "isBot": { "type": "boolean" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },

@@ -2,11 +2,14 @@ import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import fs from 'fs';
 import path from 'path';
+import {fileURLToPath} from 'url';
 import {defineConfig} from 'vite';
 
-export default defineConfig(() => {
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+export default defineConfig(({command}) => {
   return {
-    base: './',
+    base: command === 'build' ? './' : '/',
     plugins: [
       react(),
       tailwindcss(),

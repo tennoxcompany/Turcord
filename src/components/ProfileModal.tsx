@@ -17,7 +17,8 @@ import {
 } from 'lucide-react';
 import type { MemberRole, PublicProfile } from '../types/halka';
 import { getUserNote, getUserProfileByUid, ROLE_LABELS, saveUserNote } from '../lib/halkaService';
-import { Avatar, ClanTagBadge } from './Avatar';
+import { isOfficialBotUid, OFFICIAL_BOTS } from '../lib/turcordBots';
+import { Avatar, ClanTagBadge, VerifiedBotBadge } from './Avatar';
 
 interface ProfileModalProps {
   targetUid: string;
@@ -39,6 +40,7 @@ interface ProfileModalProps {
   onClose: () => void;
   onEditOwnProfile: () => void;
   onOpenShop: () => void;
+  onOpenBotDm?: () => void;
   onStartDm?: (user: { uid: string; displayName: string; username: string; avatarUrl: string }) => void;
   onAddFriend?: (uid: string) => Promise<void>;
 }
@@ -52,9 +54,11 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
   onClose,
   onEditOwnProfile,
   onOpenShop,
+  onOpenBotDm,
   onStartDm,
   onAddFriend,
 }) => {
+  const isOfficialBot = isOfficialBotUid(targetUid);
   const isMe = targetUid === currentProfile.uid;
   const [loadedProfile, setLoadedProfile] = useState<PublicProfile | null>(
     isMe ? currentProfile : null
@@ -65,6 +69,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
   const [friendSent, setFriendSent] = useState(false);
 
   useEffect(() => {
+    if (isOfficialBot) return;
     if (isMe) {
       setLoadedProfile(currentProfile);
     } else {
@@ -73,7 +78,90 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
       });
     }
     getUserNote(currentProfile.uid, targetUid).then(setNote).catch(() => {});
-  }, [targetUid, isMe, currentProfile]);
+  }, [targetUid, isMe, isOfficialBot, currentProfile]);
+
+  if (isOfficialBot) {
+    const bot = OFFICIAL_BOTS[targetUid];
+    return (
+      <div
+        onClick={onClose}
+        className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4"
+      >
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className="w-full max-w-[440px] bg-[var(--bg-surface)] border border-[var(--border-subtle)] rounded-3xl overflow-hidden shadow-2xl max-h-[90vh] flex flex-col"
+        >
+          <div style={{ backgroundColor: bot.bannerColor }} className="h-28 relative shrink-0">
+            <button
+              onClick={onClose}
+              className="absolute top-3 right-3 p-1.5 rounded-full bg-black/45 text-white hover:bg-black/70 cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          <div className="px-5 pb-6 overflow-y-auto flex-1">
+            <div className="-mt-11 mb-3 flex items-end justify-between gap-3">
+              <Avatar
+                name={bot.name}
+                size="xl"
+                status="online"
+                showStatus
+                ringBg="var(--bg-surface)"
+                botId={bot.id}
+              />
+              <VerifiedBotBadge label="ONAYLI UYGULAMA" />
+            </div>
+
+            <div className="space-y-1 mb-4">
+              <div className="flex items-center gap-2 flex-wrap">
+                <h2 className="font-display text-xl font-bold text-white leading-tight">{bot.name}</h2>
+                <VerifiedBotBadge />
+              </div>
+              <p className="text-xs text-[var(--text-muted)]">@{bot.username} · {bot.tagline}</p>
+            </div>
+
+            {onOpenBotDm && (
+              <button
+                onClick={() => {
+                  onClose();
+                  onOpenBotDm();
+                }}
+                className="w-full py-2.5 rounded-xl bg-[#5865F2] hover:bg-[#4752C4] text-white text-sm font-medium flex items-center justify-center gap-2 transition-colors cursor-pointer mb-4"
+              >
+                <MessageSquare className="w-4 h-4" />
+                <span>Turcord Resmi Bot DM&apos;ini Aç</span>
+              </button>
+            )}
+
+            <div className="space-y-3">
+              <div className="p-4 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-subtle)] space-y-2">
+                <p className="text-[11px] font-semibold text-[var(--text-muted)] uppercase">Hakkında</p>
+                <p className="text-sm text-[var(--text-secondary)] leading-relaxed">{bot.description}</p>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-subtle)] space-y-2.5">
+                <p className="text-[11px] font-semibold text-[var(--text-muted)] uppercase">
+                  Desteklenen Komutlar
+                </p>
+                <div className="space-y-2">
+                  {bot.commands.map((c) => (
+                    <div
+                      key={c.cmd}
+                      className="p-2.5 rounded-xl bg-[var(--bg-surface)] border border-[var(--border-subtle)]"
+                    >
+                      <p className="font-mono text-xs font-semibold text-[#8B9BFF]">{c.cmd}</p>
+                      <p className="text-xs text-[var(--text-muted)] mt-0.5">{c.desc}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const displayName = loadedProfile?.displayName || fallbackMember?.displayName || 'Kullanıcı';
   const username = loadedProfile?.username || fallbackMember?.username || 'user';

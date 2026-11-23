@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Activity,
   AtSign,
+  Bot,
   Hash,
   ImagePlus,
   Megaphone,
@@ -9,11 +11,14 @@ import {
   Search,
   SendHorizontal,
   Smile,
+  Sparkles,
   Users,
   Video,
   X,
 } from 'lucide-react';
 import type { ChatMessage } from '../types/halka';
+import { OFFICIAL_BOTS, SLASH_COMMANDS } from '../lib/turcordBots';
+import { Avatar, VerifiedBotBadge } from './Avatar';
 import { MessageItem } from './MessageItem';
 
 const COMPOSER_EMOJIS = ['😀', '😂', '🥹', '🔥', '❤️', '👍', '🎉', '🎮', '💻', '🚀', '👀', '✅', '⚡', '🇹🇷', '☕', '🎧'];
@@ -30,6 +35,13 @@ interface ChatAreaProps {
   canPin: boolean;
   showMemberList?: boolean;
   showTypingIndicator?: boolean;
+  compactMode?: boolean;
+  isBotThread?: boolean;
+  enableSlashCommands?: boolean;
+  enabledBots?: string[];
+  botThinking?: boolean;
+  quickPrompts?: string[];
+  onRunDiagnostics?: () => void;
   onToggleMemberList?: () => void;
   typingUsers: Array<{ uid: string; displayName: string }>;
   onTyping: (channelKey: string, isTyping: boolean) => void;
@@ -94,6 +106,13 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   canPin,
   showMemberList,
   showTypingIndicator = true,
+  compactMode = false,
+  isBotThread = false,
+  enableSlashCommands = false,
+  enabledBots,
+  botThinking = false,
+  quickPrompts,
+  onRunDiagnostics,
   onToggleMemberList,
   typingUsers,
   onTyping,
@@ -116,9 +135,11 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [pinsOpen, setPinsOpen] = useState(false);
   const [emojiOpen, setEmojiOpen] = useState(false);
+  const [slashIndex, setSlashIndex] = useState(0);
 
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
   const typingTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -144,6 +165,26 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   }, [messages, searchQuery]);
 
   const pinnedMessages = useMemo(() => messages.filter((m) => m.pinned), [messages]);
+
+  const activeSlashMatches = useMemo(() => {
+    if (!enableSlashCommands) return [];
+    if (!text.startsWith('/') || text.includes(' ')) return [];
+    const needle = text.toLowerCase();
+    return SLASH_COMMANDS.filter((c) => {
+      if (mode === 'dm' && c.serverOnly) return false;
+      if (enabledBots && !enabledBots.includes(c.botId)) return false;
+      return c.cmd.toLowerCase().startsWith(needle);
+    });
+  }, [enableSlashCommands, text, mode, enabledBots]);
+
+  useEffect(() => {
+    setSlashIndex(0);
+  }, [activeSlashMatches.length, text]);
+
+  const handleSelectSlashCommand = (usage: string) => {
+    setText(usage);
+    inputRef.current?.focus();
+  };
 
   const handleInputChange = (val: string) => {
     setText(val);
@@ -216,7 +257,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       {/* Top Bar */}
       <header className="h-12 shrink-0 px-4 border-b border-[var(--border-subtle)] flex items-center justify-between gap-4">
         <div className="flex items-center gap-2.5 min-w-0">
-          {mode === 'dm' ? (
+          {isBotThread ? (
+            <Bot className="w-5 h-5 text-[#5865F2] shrink-0" />
+          ) : mode === 'dm' ? (
             <AtSign className="w-5 h-5 text-[var(--text-muted)] shrink-0" />
           ) : channelType === 'announcement' ? (
             <Megaphone className="w-5 h-5 text-[var(--text-muted)] shrink-0" />
@@ -226,6 +269,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           <h1 className="font-display font-semibold text-[15px] text-white whitespace-nowrap shrink-0">
             {title}
           </h1>
+          {isBotThread && <VerifiedBotBadge />}
           {subtitle && (
             <>
               <span className="text-[var(--border-subtle)] hidden sm:inline" aria-hidden="true">|</span>
@@ -235,7 +279,17 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
-          {mode === 'dm' && onStartDmCall && (
+          {isBotThread && onRunDiagnostics && (
+            <button
+              onClick={onRunDiagnostics}
+              title="Sistem Tanısı Çalıştır"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-[#5865F2]/15 border border-[#5865F2]/40 hover:bg-[#5865F2]/25 text-xs font-medium text-[#A5B4FC] transition-colors cursor-pointer"
+            >
+              <Activity className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Sistem Tanısı</span>
+            </button>
+          )}
+          {mode === 'dm' && !isBotThread && onStartDmCall && (
             <>
               <button
                 onClick={() => onStartDmCall(false)}
@@ -343,17 +397,44 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       {/* Message Feed */}
       <div className="flex-1 overflow-y-auto py-4">
         <div className="px-4 pb-4 mb-2 border-b border-[var(--border-subtle)]">
-          <div className="w-14 h-14 rounded-full bg-[var(--bg-card)] border border-[var(--border-subtle)] flex items-center justify-center mb-3 text-white">
-            {mode === 'dm' ? <AtSign className="w-7 h-7" /> : <Hash className="w-7 h-7" />}
+          {isBotThread ? (
+            <div className="mb-3">
+              <Avatar name="Turcord" size="lg" botId="turcord_bot" />
+            </div>
+          ) : (
+            <div className="w-14 h-14 rounded-full bg-[var(--bg-card)] border border-[var(--border-subtle)] flex items-center justify-center mb-3 text-white">
+              {mode === 'dm' ? <AtSign className="w-7 h-7" /> : <Hash className="w-7 h-7" />}
+            </div>
+          )}
+          <div className="flex items-center gap-2 flex-wrap">
+            <h2 className="font-display text-2xl font-bold text-white">
+              {mode === 'dm' ? `${title}` : `#${title} kanalına hoş geldin!`}
+            </h2>
+            {isBotThread && <VerifiedBotBadge label="ONAYLI UYGULAMA" />}
           </div>
-          <h2 className="font-display text-2xl font-bold text-white">
-            {mode === 'dm' ? `${title}` : `#${title} kanalına hoş geldin!`}
-          </h2>
           <p className="text-sm text-[var(--text-muted)] mt-1">
-            {mode === 'dm'
+            {isBotThread
+              ? 'Resmi Turcord Botu: Platform sorunlarında otomatik uyarılar gönderir ve tüm sorularını yanıtlar.'
+              : mode === 'dm'
               ? `${title} sohbet geçmişinin başlangıcı.`
               : subtitle || `Burası #${title} kanalının başlangıcıdır.`}
           </p>
+          {isBotThread && quickPrompts && quickPrompts.length > 0 && (
+            <div className="flex flex-wrap gap-2 mt-3">
+              {quickPrompts.map((qp) => (
+                <button
+                  key={qp}
+                  type="button"
+                  disabled={sending || botThinking}
+                  onClick={() => onSendMessage({ content: qp })}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[var(--bg-card)] border border-[var(--border-subtle)] hover:border-[#5865F2] text-xs font-medium text-[var(--text-secondary)] hover:text-white transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  <Sparkles className="w-3 h-3 text-[#5865F2]" />
+                  <span>{qp}</span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         {filteredMessages.length === 0 ? (
@@ -366,6 +447,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               key={msg.id}
               message={msg}
               grouped={isGrouped(idx)}
+              compactMode={compactMode}
               currentUid={currentUid}
               canModerate={canModerate}
               canPin={canPin}
@@ -383,7 +465,45 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       </div>
 
       {/* Composer */}
-      <div className="px-4 pb-4 pt-1 shrink-0">
+      <div className="px-4 pb-4 pt-1 shrink-0 relative">
+        {/* Slash Command Autocomplete Popup */}
+        {activeSlashMatches.length > 0 && (
+          <div className="mb-2 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-subtle)] shadow-2xl overflow-hidden z-30">
+            <div className="px-3.5 py-2 border-b border-[var(--border-subtle)] flex items-center justify-between text-[11px] font-semibold text-[var(--text-muted)] uppercase">
+              <span>Bot Komutları</span>
+              <span>↑↓ Seç · Tab / Enter Uygula</span>
+            </div>
+            <div className="max-h-56 overflow-y-auto divide-y divide-[var(--border-subtle)]/50">
+              {activeSlashMatches.map((item, idx) => {
+                const bot = OFFICIAL_BOTS[item.botId];
+                const selected = idx === slashIndex;
+                return (
+                  <button
+                    key={item.cmd}
+                    type="button"
+                    onClick={() => handleSelectSlashCommand(item.usage)}
+                    className={`w-full flex items-center justify-between gap-3 px-3.5 py-2.5 text-left transition-colors cursor-pointer ${
+                      selected ? 'bg-[#5865F2]/20' : 'hover:bg-[var(--bg-hover)]'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <Avatar name={bot.name} size="xs" botId={bot.id} />
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono text-sm font-semibold text-white">{item.cmd}</span>
+                          <span className="text-[11px] text-[var(--text-muted)] truncate">{bot.name}</span>
+                        </div>
+                        <p className="text-xs text-[var(--text-secondary)] truncate">{item.desc}</p>
+                      </div>
+                    </div>
+                    <VerifiedBotBadge />
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {uploadError && (
           <div className="flex items-center justify-between px-3 py-1.5 mb-1.5 rounded-lg bg-rose-500/15 border border-rose-500/30 text-xs text-rose-300">
             <span>{uploadError}</span>
@@ -451,10 +571,39 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           </button>
 
           <input
+            ref={inputRef}
             type="text"
             value={text}
             onChange={(e) => handleInputChange(e.target.value)}
-            placeholder={mode === 'dm' ? `${title} sohbetine mesaj gönder` : `#${title} kanalına mesaj gönder`}
+            onKeyDown={(e) => {
+              if (activeSlashMatches.length > 0) {
+                if (e.key === 'ArrowDown') {
+                  e.preventDefault();
+                  setSlashIndex((i) => (i + 1) % activeSlashMatches.length);
+                  return;
+                }
+                if (e.key === 'ArrowUp') {
+                  e.preventDefault();
+                  setSlashIndex((i) => (i - 1 + activeSlashMatches.length) % activeSlashMatches.length);
+                  return;
+                }
+                if (e.key === 'Tab') {
+                  e.preventDefault();
+                  const chosen = activeSlashMatches[slashIndex];
+                  if (chosen) handleSelectSlashCommand(chosen.usage);
+                  return;
+                }
+              }
+            }}
+            placeholder={
+              isBotThread
+                ? 'Turcord botuna bir soru yaz veya /durum komutunu dene...'
+                : mode === 'dm'
+                ? `${title} sohbetine mesaj gönder`
+                : enableSlashCommands
+                ? `#${title} kanalına mesaj veya /komut yaz`
+                : `#${title} kanalına mesaj gönder`
+            }
             maxLength={2000}
             className="flex-1 bg-transparent text-[15px] text-[var(--text-primary)] placeholder-[var(--text-muted)] outline-none min-w-0"
           />
@@ -497,15 +646,23 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           </button>
         </form>
 
-        {/* Live Typing Indicator */}
-        <div className="h-5 mt-1 px-1 flex items-center text-xs text-[var(--text-secondary)]">
-          {showTypingIndicator && typingUsers.length > 0 && (
-            <span>
-              <strong className="text-white">
-                {typingUsers.map((t) => t.displayName).join(', ')}
-              </strong>{' '}
-              yazıyor...
+        {/* Live Typing & Bot Thinking Indicator */}
+        <div className="h-5 mt-1 px-1 flex items-center text-xs text-[var(--text-secondary)] gap-2">
+          {botThinking ? (
+            <span className="inline-flex items-center gap-1.5 text-[#8B9BFF]">
+              <Bot className="w-3.5 h-3.5 animate-pulse" />
+              <strong>Turcord</strong> yanıt hazırlıyor...
             </span>
+          ) : (
+            showTypingIndicator &&
+            typingUsers.length > 0 && (
+              <span>
+                <strong className="text-white">
+                  {typingUsers.map((t) => t.displayName).join(', ')}
+                </strong>{' '}
+                yazıyor...
+              </span>
+            )
           )}
         </div>
       </div>

@@ -1,13 +1,15 @@
 import React, { useState } from 'react';
 import { Bookmark, Check, CornerUpLeft, Pencil, Pin, SmilePlus, Trash2, X } from 'lucide-react';
 import type { ChatMessage } from '../types/halka';
-import { Avatar } from './Avatar';
+import { isOfficialBotUid } from '../lib/turcordBots';
+import { Avatar, VerifiedBotBadge } from './Avatar';
 
 const QUICK_EMOJIS = ['👍', '❤️', '😂', '🔥', '🎉', '👀'];
 
 interface MessageItemProps {
   message: ChatMessage;
   grouped: boolean;
+  compactMode?: boolean;
   currentUid: string;
   canModerate: boolean;
   canPin: boolean;
@@ -122,6 +124,7 @@ function renderMessageContent(content: string): React.ReactNode {
 export const MessageItem: React.FC<MessageItemProps> = ({
   message,
   grouped,
+  compactMode = false,
   currentUid,
   canModerate,
   canPin,
@@ -140,6 +143,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
   const [bookmarked, setBookmarked] = useState(false);
 
   const isAuthor = message.authorId === currentUid;
+  const isBotMsg = Boolean(message.isBot) || isOfficialBotUid(message.authorId);
   const reactionsEntries = Object.entries(message.reactions || {}).filter(([, uids]) => uids.length > 0);
 
   const handleSaveEdit = async () => {
@@ -153,9 +157,11 @@ export const MessageItem: React.FC<MessageItemProps> = ({
 
   return (
     <div
-      className={`group relative px-4 py-1 hover:bg-[var(--bg-hover)]/75 transition-colors ${
-        grouped ? 'mt-0.5' : 'mt-3.5 pt-1'
-      } ${message.pinned ? 'bg-[#F0B232]/5' : ''}`}
+      className={`group relative px-4 ${compactMode ? 'py-0.5' : 'py-1'} hover:bg-[var(--bg-hover)]/75 transition-colors ${
+        grouped ? 'mt-0.5' : compactMode ? 'mt-1.5 pt-0.5' : 'mt-3.5 pt-1'
+      } ${message.pinned ? 'bg-[#F0B232]/5' : ''} ${
+        isBotMsg && !grouped ? 'border-l-2 border-[#5865F2]/60' : ''
+      }`}
     >
       {/* Reply Reference Header */}
       {message.replyToId && (
@@ -166,7 +172,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
         </div>
       )}
 
-      <div className="flex items-start gap-4">
+      <div className={`flex items-start ${compactMode ? 'gap-3' : 'gap-4'}`}>
         {/* Left gutter: Avatar or Hover Timestamp */}
         {!grouped ? (
           <button
@@ -174,10 +180,15 @@ export const MessageItem: React.FC<MessageItemProps> = ({
             onClick={() => onAuthorClick?.(message.authorId)}
             className="mt-0.5 shrink-0 cursor-pointer"
           >
-            <Avatar src={message.authorAvatar} name={message.authorName} size="md" />
+            <Avatar
+              src={message.authorAvatar}
+              name={message.authorName}
+              size={compactMode ? 'sm' : 'md'}
+              botId={isBotMsg ? message.authorId : undefined}
+            />
           </button>
         ) : (
-          <div className="w-10 shrink-0 flex items-center justify-end pr-1 pt-1">
+          <div className={`${compactMode ? 'w-8' : 'w-10'} shrink-0 flex items-center justify-end pr-1 pt-1`}>
             <span className="text-[10px] text-[var(--text-muted)] opacity-0 group-hover:opacity-100 tabular-nums select-none">
               {formatTime(message)}
             </span>
@@ -187,15 +198,16 @@ export const MessageItem: React.FC<MessageItemProps> = ({
         {/* Message Body */}
         <div className="flex-1 min-w-0">
           {!grouped && (
-            <div className="flex items-baseline gap-2 mb-0.5">
+            <div className="flex items-center gap-2 mb-0.5 flex-wrap">
               <button
                 type="button"
                 onClick={() => onAuthorClick?.(message.authorId)}
-                style={{ color: message.authorRoleColor || '#F2F3F5' }}
+                style={{ color: message.authorRoleColor || (isBotMsg ? '#8B9BFF' : '#F2F3F5') }}
                 className="font-medium text-[15px] hover:underline cursor-pointer truncate"
               >
                 {message.authorName}
               </button>
+              {isBotMsg && <VerifiedBotBadge />}
               <span className="text-[11px] text-[var(--text-muted)] tabular-nums shrink-0">
                 {formatFullDate(message)}
               </span>
@@ -365,7 +377,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
               <Pin className="w-4 h-4" />
             </button>
           )}
-          {isAuthor && (
+          {isAuthor && !isBotMsg && (
             <button
               onClick={() => {
                 setDraft(message.content);

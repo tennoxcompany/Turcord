@@ -24,7 +24,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onGoogleLogin, error }
       {/* Left Column: Auth & Value Prop */}
       <div className="flex-1 flex flex-col justify-between p-8 sm:p-12 lg:p-16 max-w-2xl mx-auto lg:mx-0">
         <div className="flex items-center justify-between">
-          <span className="font-display text-2xl font-bold tracking-tight text-white">Halka</span>
+          <span className="font-display text-2xl font-bold tracking-tight text-white">Turcord</span>
           <span className="text-xs text-[#949BA4]">Sesli &amp; Yazılı Topluluk Platformu</span>
         </div>
 
@@ -69,10 +69,10 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onGoogleLogin, error }
             <div className="p-4 rounded-xl bg-[#1E1F22] border border-[#2B2D31] space-y-1.5">
               <div className="flex items-center gap-2 text-white font-medium text-sm">
                 <ShieldCheck className="w-4 h-4 text-[#B5BAC1]" />
-                <span>Roller &amp; Davet Kodları</span>
+                <span>Turcord Bot &amp; Roller</span>
               </div>
               <p className="text-xs text-[#949BA4] leading-relaxed">
-                Kurucu, yönetici ve moderatör yetkileriyle sunucunu güvenle yönet.
+                Resmi Turcord botu, slash komutları, moderasyon ve yetki yönetimi.
               </p>
             </div>
           </div>
@@ -101,7 +101,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onGoogleLogin, error }
         </div>
 
         <div className="text-xs text-[#80848E] flex items-center gap-2">
-          <span>Halka Topluluk Platformu</span>
+          <span>Turcord Topluluk Platformu</span>
           <span aria-hidden="true">·</span>
           <span>Tarayıcıdan Anında Erişim</span>
         </div>
@@ -111,7 +111,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onGoogleLogin, error }
       <div className="hidden lg:block flex-1 relative overflow-hidden bg-[#18191C] border-l border-[#2B2D31]">
         <img
           src={loginShowcaseImg}
-          alt="Halka sesli ve topluluk iletişim halkaları"
+          alt="Turcord sesli ve topluluk iletişim kanalları"
           referrerPolicy="no-referrer"
           className="w-full h-full object-cover opacity-90"
         />

@@ -26,9 +26,17 @@ import type {
   UserStatus,
   VoiceParticipant,
 } from '../types/halka';
-import { Avatar, ClanTagBadge } from './Avatar';
+import { isOfficialBotUid } from '../lib/turcordBots';
+import { Avatar, ClanTagBadge, VerifiedBotBadge } from './Avatar';
 import { ChatArea } from './ChatArea';
 import { VoiceStage } from './VoiceStage';
+
+const BOT_QUICK_PROMPTS = [
+  'Sesli odada mikrofonum çalışmıyor, ne yapmalıyım?',
+  'Yeni sunucu ve bot komutları nasıl kullanılır?',
+  '/durum',
+  '/yardim',
+];
 
 interface FriendsHomeProps {
   profile: PublicProfile;
@@ -49,6 +57,8 @@ interface FriendsHomeProps {
   screenSharing: boolean;
   voiceError: string | null;
   unreadNotificationsCount: number;
+  botThinking?: boolean;
+  onRunBotDiagnostics?: () => void;
   onSelectFriendsTab: () => void;
   onSelectDmThread: (threadId: string) => void;
   onOpenDmWithUser: (other: { uid: string; displayName: string; username: string; avatarUrl: string }) => Promise<void>;
@@ -100,6 +110,8 @@ export const FriendsHome: React.FC<FriendsHomeProps> = ({
   screenSharing,
   voiceError,
   unreadNotificationsCount,
+  botThinking = false,
+  onRunBotDiagnostics,
   onSelectFriendsTab,
   onSelectDmThread,
   onOpenDmWithUser,
@@ -177,9 +189,17 @@ export const FriendsHome: React.FC<FriendsHomeProps> = ({
     [acceptedFriends, onlineUsers]
   );
 
+  const sortedDmThreads = useMemo(() => {
+    return [...dmThreads].sort((a, b) => {
+      if (a.isBotThread && !b.isBotThread) return -1;
+      if (!a.isBotThread && b.isBotThread) return 1;
+      return 0;
+    });
+  }, [dmThreads]);
+
   const activeThread = useMemo(
-    () => dmThreads.find((t) => t.id === activeDmThreadId) || null,
-    [dmThreads, activeDmThreadId]
+    () => sortedDmThreads.find((t) => t.id === activeDmThreadId) || null,
+    [sortedDmThreads, activeDmThreadId]
   );
 
   const activeThreadTitle = useMemo(() => {
@@ -343,15 +363,16 @@ export const FriendsHome: React.FC<FriendsHomeProps> = ({
             </button>
           </div>
 
-          {dmThreads.length === 0 ? (
+          {sortedDmThreads.length === 0 ? (
             <p className="px-2 py-3 text-xs text-[var(--text-muted)]">
               Henüz direkt mesaj yok. Yukarıdaki + butonundan yeni mesaj veya grup başlatabilirsin.
             </p>
           ) : (
-            dmThreads.map((t) => {
+            sortedDmThreads.map((t) => {
               const otherUid = t.participants.find((id) => id !== profile.uid) || '';
               const p = t.participantProfiles[otherUid];
-              const name = t.isGroup ? t.groupName || 'Grup Sohbeti' : p?.displayName || 'Kullanıcı';
+              const isBot = Boolean(t.isBotThread) || isOfficialBotUid(otherUid);
+              const name = t.isGroup ? t.groupName || 'Grup Sohbeti' : p?.displayName || (isBot ? 'Turcord' : 'Kullanıcı');
               const isActive = activeDmThreadId === t.id;
               return (
                 <button
@@ -360,6 +381,8 @@ export const FriendsHome: React.FC<FriendsHomeProps> = ({
                   className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl transition-colors text-left cursor-pointer ${
                     isActive
                       ? 'bg-[var(--bg-elevated)] text-white'
+                      : isBot
+                      ? 'bg-[#5865F2]/8 text-[var(--text-primary)] hover:bg-[#5865F2]/15'
                       : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-white'
                   }`}
                 >
@@ -372,14 +395,18 @@ export const FriendsHome: React.FC<FriendsHomeProps> = ({
                       src={p?.avatarUrl}
                       name={name}
                       size="sm"
-                      status={getStatus(otherUid)}
+                      status={isBot ? 'online' : getStatus(otherUid)}
                       showStatus
                       ringBg="var(--bg-sidebar)"
+                      botId={isBot ? otherUid : undefined}
                     />
                   )}
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center justify-between gap-1">
-                      <p className="text-sm font-medium truncate">{name}</p>
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <p className="text-sm font-medium truncate">{name}</p>
+                        {isBot && <VerifiedBotBadge />}
+                      </div>
                       {t.isGroup && (
                         <span className="text-[10px] text-[var(--text-muted)] tabular-nums shrink-0">
                           {t.participants.length} kişi
@@ -513,7 +540,9 @@ export const FriendsHome: React.FC<FriendsHomeProps> = ({
             mode="dm"
             title={activeThreadTitle}
             subtitle={
-              activeThread.isGroup
+              activeThread.isBotThread
+                ? 'Resmi Turcord Botu · Yapay Zeka & Sistem Desteği'
+                : activeThread.isGroup
                 ? `${activeThread.participants.length} katılımcı`
                 : activeOtherUser
                 ? `@${activeOtherUser.username}`
@@ -522,8 +551,14 @@ export const FriendsHome: React.FC<FriendsHomeProps> = ({
             channelKey={`dm:${activeThread.id}`}
             messages={dmMessages}
             currentUid={profile.uid}
-            canModerate={false}
+            canModerate={Boolean(activeThread.isBotThread)}
             canPin={false}
+            compactMode={Boolean(profile.compactMode)}
+            isBotThread={Boolean(activeThread.isBotThread)}
+            enableSlashCommands={Boolean(activeThread.isBotThread)}
+            botThinking={Boolean(activeThread.isBotThread && botThinking)}
+            quickPrompts={activeThread.isBotThread ? BOT_QUICK_PROMPTS : undefined}
+            onRunDiagnostics={activeThread.isBotThread ? onRunBotDiagnostics : undefined}
             showTypingIndicator={profile.showTypingIndicator ?? true}
             typingUsers={typingUsers}
             onTyping={onTyping}
@@ -534,7 +569,7 @@ export const FriendsHome: React.FC<FriendsHomeProps> = ({
             onBookmark={(msg) => onBookmarkMessage(msg, activeThreadTitle)}
             onAuthorClick={(uid) => onOpenProfile(uid)}
             onStartDmCall={
-              activeOtherUser
+              activeOtherUser && !activeThread.isBotThread
                 ? (video) =>
                     onStartDmCall(activeOtherUser.uid, activeOtherUser.displayName, activeThread.id, video)
                 : undefined
@@ -670,7 +705,7 @@ export const FriendsHome: React.FC<FriendsHomeProps> = ({
                 <div>
                   <h2 className="font-display text-lg font-bold text-white">Arkadaş Ekle</h2>
                   <p className="text-sm text-[var(--text-muted)] mt-1">
-                    Halka kullanıcı adıyla arkadaşını bul ve istek gönder. (Senin kullanıcı adın: <strong className="text-white">@{profile.username}</strong>)
+                    Turcord kullanıcı adıyla arkadaşını bul ve istek gönder. (Senin kullanıcı adın: <strong className="text-white">@{profile.username}</strong>)
                   </p>
                 </div>
                 <form onSubmit={handleAddFriendSubmit} className="flex gap-2">

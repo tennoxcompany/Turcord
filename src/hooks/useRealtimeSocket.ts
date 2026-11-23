@@ -236,7 +236,11 @@ export function useRealtimeSocket(profile: PublicProfile | null, activeServerId:
       setVoiceError(null);
 
       try {
-        const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        const noiseSuppression = profileRef.current?.noiseSuppression ?? true;
+        const audioStream = await navigator.mediaDevices.getUserMedia({
+          audio: { noiseSuppression, echoCancellation: true },
+          video: false,
+        });
         audioStream.getAudioTracks().forEach((t) => {
           t.enabled = !muted && !deafened;
         });

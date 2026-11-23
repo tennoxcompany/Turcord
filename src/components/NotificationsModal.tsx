@@ -137,12 +137,21 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
                       }`}
                     >
                       <div className="flex items-start gap-3 min-w-0">
-                        <Avatar src={n.fromAvatar} name={n.fromName} size="md" />
+                        <Avatar
+                          src={n.fromAvatar}
+                          name={n.fromName}
+                          size="md"
+                          botId={n.fromUid === 'turcord_bot' ? 'turcord_bot' : undefined}
+                        />
                         <div className="min-w-0 space-y-1">
                           <p className="text-xs text-[var(--text-secondary)]">
                             <strong className="text-white">{n.fromName}</strong> ·{' '}
                             <span className="text-white">{n.channelLabel}</span>{' '}
-                            {n.type === 'reply' ? 'kanalında sana yanıt verdi:' : 'seni etiketledi:'}
+                            {n.type === 'reply'
+                              ? 'kanalında sana yanıt verdi:'
+                              : n.type === 'system'
+                              ? 'sistem uyarısı gönderdi:'
+                              : 'seni etiketledi:'}
                           </p>
                           <p className="text-sm text-[#DBDEE1] break-words pl-2.5 border-l-2 border-[#3F4147]">
                             {n.preview}

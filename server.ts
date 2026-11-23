@@ -1,12 +1,98 @@
+import 'dotenv/config';
 import express from 'express';
 import http from 'http';
 import path from 'path';
 import fs from 'fs';
 import { WebSocketServer, WebSocket } from 'ws';
 import { fileURLToPath } from 'url';
+import { GoogleGenAI } from '@google/genai';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+const geminiClient = process.env.GEMINI_API_KEY
+  ? new GoogleGenAI({
+      apiKey: process.env.GEMINI_API_KEY,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        },
+      },
+    })
+  : null;
+
+const BOT_MODELS = ['gemini-4-hydrogen', 'gemini-3.1-flash-lite'] as const;
+
+function isTransientGeminiError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err || '');
+  return (
+    msg.includes('"code":503') ||
+    msg.includes('503') ||
+    msg.includes('UNAVAILABLE') ||
+    msg.includes('high demand') ||
+    msg.includes('overloaded') ||
+    msg.includes('ECONNRESET') ||
+    msg.includes('ETIMEDOUT')
+  );
+}
+
+function formatGeminiErrorMessage(err: unknown): { status: number; message: string } {
+  const raw = err instanceof Error ? err.message : String(err || 'Bilinmeyen yapay zeka hatası');
+  if (raw.includes('503') || raw.includes('UNAVAILABLE') || raw.includes('high demand')) {
+    return {
+      status: 503,
+      message: 'Yapay zeka sunucuları şu an yoğun (503). Birkaç saniye sonra tekrar dene.',
+    };
+  }
+  if (raw.includes('429') || raw.includes('RESOURCE_EXHAUSTED')) {
+    return {
+      status: 429,
+      message: 'İstek limiti geçici olarak doldu (429). Kısa bir süre sonra tekrar dene.',
+    };
+  }
+  if (raw.includes('PERMISSION_DENIED') || raw.includes('API_KEY_INVALID') || raw.includes('403')) {
+    return {
+      status: 403,
+      message: 'API anahtarı doğrulanamadı. Lütfen Ayarlar > Gizli Anahtarlar (Secrets) panelini kontrol et.',
+    };
+  }
+  return {
+    status: 500,
+    message: raw.slice(0, 260),
+  };
+}
+
+async function generateBotReplyWithRetry(
+  client: GoogleGenAI,
+  fullPrompt: string,
+  systemInstruction: string
+): Promise<string> {
+  let lastError: unknown;
+  for (const model of BOT_MODELS) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const response = await client.models.generateContent({
+          model,
+          contents: fullPrompt,
+          config: { systemInstruction },
+        });
+        const replyText = (response.text || '').trim();
+        if (replyText) {
+          return replyText.slice(0, 1900);
+        }
+        lastError = new Error('Model boş yanıt döndürdü.');
+      } catch (err) {
+        lastError = err;
+        if (!isTransientGeminiError(err)) {
+          throw err;
+        }
+        const delayMs = 600 * Math.pow(2, attempt) + Math.floor(Math.random() * 250);
+        await new Promise((r) => setTimeout(r, delayMs));
+      }
+    }
+  }
+  throw lastError || new Error('Yanıt alınamadı.');
+}
 
 interface ClientMeta {
   ws: WebSocket;
@@ -162,7 +248,7 @@ function broadcastTypingForChannel(channelKey: string) {
 }
 
 // Periodically expire stale typing indicators
-setInterval(() => {
+const typingSweepTimer = setInterval(() => {
   const now = Date.now();
   for (const [channelKey, channelMap] of typingState.entries()) {
     let changed = false;
@@ -184,6 +270,57 @@ async function startServer() {
 
   app.get('/api/health', (_req, res) => {
     res.json({ ok: true, timestamp: Date.now() });
+  });
+
+  app.post('/api/bot/reply', async (req, res) => {
+    if (!geminiClient) {
+      return res.status(503).json({
+        error: 'Turcord Resmi Bot yanıt servisi yapılandırılmamış (GEMINI_API_KEY eksik).',
+      });
+    }
+
+    const body = req.body || {};
+    const prompt = typeof body.prompt === 'string' ? body.prompt.trim().slice(0, 1500) : '';
+    const userDisplayName = typeof body.userDisplayName === 'string' ? body.userDisplayName.slice(0, 40) : 'Kullanıcı';
+    const contextType = body.contextType === 'channel' ? 'channel' : 'dm';
+    const serverName = typeof body.serverName === 'string' ? body.serverName.slice(0, 60) : '';
+    const channelName = typeof body.channelName === 'string' ? body.channelName.slice(0, 50) : '';
+    const history = Array.isArray(body.history)
+      ? body.history
+          .slice(-8)
+          .map((item: { author?: string; content?: string }) => `${String(item.author || 'Üye').slice(0, 30)}: ${String(item.content || '').slice(0, 400)}`)
+          .join('\n')
+      : '';
+
+    if (!prompt) {
+      return res.status(400).json({ error: 'Mesaj içeriği boş olamaz.' });
+    }
+
+    const systemInstruction = [
+      'Sen Turcord platformunun resmi doğrulanmış botusun (Adın: Turcord, rozet: ONAYLI UYGULAMA).',
+      'Kullanıcılarla samimi, net, yardımcı ve Discord kültürüne hakim bir Türkçe ile konuşursun.',
+      'Turcord özellikleri: Sunucular, metin/duyuru/sesli ve görüntülü kanallar, ekran paylaşımı, arkadaşlık sistemi, grup DM, Oniks (AMOLED)/Koyu/Gece temaları, Orbs mağazası & görevler, klan etiketleri, bildirimler, yer işaretleri ve sunucu botları (/yardim, /turcord, /oylama, /zar, /yazi-tura, /8ball, /temizle).',
+      'Kullanıcı bir teknik sorun (mikrofon, kamera, bağlantı, izin, sunucu kurulumu, yetki) yaşadığında adım adım pratik çözüm öner.',
+      'Yanıtların kısa, okunaklı, Discord markdown biçimlendirmeli (**kalın**, `kod`) ve gereksiz uzatmasız olsun (en fazla 1200 karakter).',
+    ].join('\n');
+
+    const fullPrompt = [
+      `Kullanıcı: ${userDisplayName}`,
+      contextType === 'channel' ? `Ortam: "${serverName}" sunucusundaki #${channelName} kanalı` : 'Ortam: Turcord Resmi Bot Direkt Mesaj (DM)',
+      history ? `Son mesaj geçmişi:\n${history}` : '',
+      `Güncel mesaj: ${prompt}`,
+    ]
+      .filter(Boolean)
+      .join('\n\n');
+
+    try {
+      const reply = await generateBotReplyWithRetry(geminiClient, fullPrompt, systemInstruction);
+      return res.json({ reply });
+    } catch (err) {
+      console.error('Turcord Bot Gemini error:', err);
+      const formatted = formatGeminiErrorMessage(err);
+      return res.status(formatted.status).json({ error: formatted.message });
+    }
   });
 
   const server = http.createServer(app);
@@ -433,13 +570,36 @@ async function startServer() {
     });
   });
 
+  const PORT = 3000;
+  let viteReady: Promise<void> | null = null;
+  let viteServer: { close: () => Promise<void> } | null = null;
+
   if (process.env.NODE_ENV !== 'production') {
-    const { createServer: createViteServer } = await import('vite');
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: 'spa',
+    let viteMiddleware: ((req: express.Request, res: express.Response, next: express.NextFunction) => void) | null = null;
+    viteReady = import('vite')
+      .then(async ({ createServer: createViteServer }) => {
+        const vite = await createViteServer({
+          server: { middlewareMode: true, hmr: false },
+          appType: 'spa',
+        });
+        viteServer = vite;
+        viteMiddleware = vite.middlewares;
+      })
+      .catch((err) => {
+        console.error('Vite middleware initialization failed:', err);
+      });
+
+    app.use(async (req, res, next) => {
+      try {
+        if (viteReady) await viteReady;
+        if (viteMiddleware) {
+          return viteMiddleware(req, res, next);
+        }
+        res.status(503).send('Vite dev middleware unavailable');
+      } catch (err) {
+        next(err);
+      }
     });
-    app.use(vite.middlewares);
   } else {
     const distDir = path.resolve(__dirname, 'dist');
     app.use(express.static(distDir));
@@ -453,10 +613,29 @@ async function startServer() {
     });
   }
 
-  const PORT = 3000;
   server.listen(PORT, '0.0.0.0', () => {
-    console.log(`Halka server running on http://0.0.0.0:${PORT}`);
+    console.log(`Turcord server running on http://0.0.0.0:${PORT}`);
   });
+
+  const shutdown = () => {
+    clearInterval(typingSweepTimer);
+    for (const ws of clients.keys()) {
+      try {
+        ws.terminate();
+      } catch {
+        // Ignore close errors
+      }
+    }
+    wss.close();
+    viteServer?.close().catch(() => {});
+    server.close(() => {
+      process.exit(0);
+    });
+    setTimeout(() => process.exit(0), 1500).unref();
+  };
+
+  process.once('SIGTERM', shutdown);
+  process.once('SIGINT', shutdown);
 }
 
 startServer().catch((err) => {

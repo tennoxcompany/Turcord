@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
 import { collection, doc, limit, onSnapshot, orderBy, query, where } from 'firebase/firestore';
 import { Menu, Phone, PhoneOff, Plus, Compass, X } from 'lucide-react';
@@ -15,6 +15,7 @@ import {
   deleteServer,
   editChannelMessage,
   editDmMessage,
+  ensureTurcordBotThread,
   ensureUserProfile,
   getOrCreateDmThread,
   joinServer,
@@ -23,6 +24,9 @@ import {
   leaveServer,
   removeFriendOrRequest,
   ROLE_LABELS,
+  sendBotAlertToUser,
+  sendBotChannelMessage,
+  sendBotDmMessage,
   sendChannelMessage,
   sendDmMessage,
   sendFriendRequestByUid,
@@ -34,6 +38,7 @@ import {
   updateServerSettings,
   updateUserProfile,
 } from './lib/halkaService';
+import { getBotThreadId, requestTurcordBotReply } from './lib/turcordBots';
 import { useRealtimeSocket } from './hooks/useRealtimeSocket';
 import type {
   ChannelDoc,
@@ -105,6 +110,8 @@ function HalkaApp() {
   const [userSettingsOpen, setUserSettingsOpen] = useState(false);
   const [shopTab, setShopTab] = useState<'shop' | 'quests' | null>(null);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [botThinking, setBotThinking] = useState(false);
+  const lastVoiceAlertRef = useRef<string | null>(null);
 
   // Determine focused channelKey for typing indicators
   const activeChannel = useMemo(
@@ -135,23 +142,42 @@ function HalkaApp() {
 
   // 1. Auth Listener & Profile Bootstrap
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, async (user) => {
-      if (!user) {
-        setProfile(null);
+    const unsub = onAuthStateChanged(
+      auth,
+      async (user) => {
+        if (!user) {
+          setProfile(null);
+          setAuthReady(true);
+          return;
+        }
+        try {
+          const p = await ensureUserProfile(user);
+          setProfile(p);
+          ensureTurcordBotThread(p).catch(() => {});
+        } catch (err) {
+          setAuthError(err instanceof Error ? err.message : 'Profil yüklenemedi.');
+        } finally {
+          setAuthReady(true);
+        }
+      },
+      (err) => {
+        setAuthError(err.message || 'Oturum durumu alınamadı.');
         setAuthReady(true);
-        return;
       }
-      try {
-        const p = await ensureUserProfile(user);
-        setProfile(p);
-      } catch (err) {
-        setAuthError(err instanceof Error ? err.message : 'Profil yüklenemedi.');
-      } finally {
-        setAuthReady(true);
-      }
-    });
+    );
     return () => unsub();
   }, []);
+
+  // Automatic Turcord Bot Alerts on Voice/Media Errors
+  useEffect(() => {
+    if (!profile) return;
+    if (rt.voiceError && rt.voiceError !== lastVoiceAlertRef.current) {
+      lastVoiceAlertRef.current = rt.voiceError;
+      sendBotAlertToUser(profile, 'Ses / Medya Bağlantı Uyarısı', rt.voiceError);
+    } else if (!rt.voiceError) {
+      lastVoiceAlertRef.current = null;
+    }
+  }, [profile, rt.voiceError]);
 
   // 2. Live Profile Listener
   useEffect(() => {
@@ -366,7 +392,7 @@ function HalkaApp() {
       <div className="min-h-screen bg-[var(--bg-rail)] text-[var(--text-muted)] flex items-center justify-center">
         <div className="text-center space-y-3">
           <div className="w-10 h-10 mx-auto rounded-xl bg-[#5865F2] animate-pulse" />
-          <p className="text-sm font-medium">Halka başlatılıyor...</p>
+          <p className="text-sm font-medium">Turcord başlatılıyor...</p>
         </div>
       </div>
     );
@@ -411,6 +437,317 @@ function HalkaApp() {
     rt.ringUser(otherUid, roomKey, video);
   };
 
+  const handleOpenBotDm = async () => {
+    const thread = await ensureTurcordBotThread(profile);
+    setActiveView('home');
+    setActiveDmThreadId(thread.id);
+    setMobileNavOpen(false);
+    setUserSettingsOpen(false);
+  };
+
+  const runBotDiagnostics = async () => {
+    const thread = await ensureTurcordBotThread(profile);
+    const hasMediaApi = typeof navigator !== 'undefined' && Boolean(navigator.mediaDevices);
+    const onlineStatus = typeof navigator !== 'undefined' && navigator.onLine ? 'Çevrimiçi' : 'Çevrimdışı';
+    const report = [
+      '🩺 **Turcord Sistem Tanısı Raporu**',
+      `• Ağ Durumu: **${onlineStatus}**`,
+      `• Gerçek Zamanlı WebSocket: **${rt.wsConnected ? 'Bağlı' : 'Bağlantı Bekleniyor'}**`,
+      `• Aktif Ses Odası: **${rt.activeVoiceRoomKey ? rt.activeVoiceLabel : 'Bağlı değil'}**`,
+      `• Mikrofon / Kamera API: **${hasMediaApi ? 'Hazır' : 'Tarayıcı desteklemiyor'}**`,
+      `• Otomatik Hata Bildirimleri: **${profile.botAlerts !== false ? 'Açık' : 'Kapalı'}**`,
+      `• Gürültü Engelleme: **${profile.noiseSuppression !== false ? 'Açık' : 'Kapalı'}**`,
+      rt.voiceError ? `• Son Ses Hatası: \`${rt.voiceError}\`` : '• Son Ses Hatası: Yok',
+    ].join('\n');
+    await sendBotDmMessage(thread.id, report, 'turcord_bot');
+    setActiveView('home');
+    setActiveDmThreadId(thread.id);
+    setMobileNavOpen(false);
+  };
+
+  const handleSendDmMessage = async (payload: {
+    content: string;
+    attachmentUrl?: string;
+    attachmentName?: string;
+    replyTo?: ChatMessage | null;
+  }) => {
+    if (!activeDmThreadId) return;
+    await sendDmMessage(activeDmThreadId, profile, payload);
+
+    if (activeDmThreadId !== getBotThreadId(profile.uid)) return;
+    const trimmed = payload.content.trim();
+    if (!trimmed) return;
+
+    const lower = trimmed.toLowerCase();
+    if (lower === '/yardim') {
+      await sendBotDmMessage(
+        activeDmThreadId,
+        [
+          '🤖 **Turcord Resmi Bot Komutları (DM)**',
+          '• Doğrudan bana herhangi bir soru yazabilirsin (örn: *"Sesli odada yankı oluyor, nasıl düzeltirim?"*).',
+          '• `/durum` — Canlı bağlantı, ses ve tarayıcı tanısı çalıştırır.',
+          '• `/yardim` — Bu yardım mesajını gösterir.',
+          '',
+          '**Sunucu Kanallarında Kullanabileceğin Komutlar:**',
+          '`/turcord <soru>`, `/oylama <konu>`, `/duyuru <metin>`, `/zar [üst]`, `/yazi-tura`, `/8ball <soru>`, `/temizle <sayı>`',
+        ].join('\n'),
+        'turcord_bot'
+      );
+      return;
+    }
+
+    if (lower === '/durum') {
+      await runBotDiagnostics();
+      return;
+    }
+
+    setBotThinking(true);
+    try {
+      const history = dmMessages.slice(-8).map((m) => ({
+        author: m.authorName,
+        content: m.content,
+      }));
+      const reply = await requestTurcordBotReply({
+        prompt: trimmed,
+        userDisplayName: profile.displayName,
+        contextType: 'dm',
+        history,
+      });
+      await sendBotDmMessage(activeDmThreadId, reply, 'turcord_bot');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Bilinmeyen sunucu hatası.';
+      await sendBotDmMessage(
+        activeDmThreadId,
+        `⚠️ **Turcord Bot yanıt üretemedi:** ${msg}`,
+        'turcord_bot'
+      );
+    } finally {
+      setBotThinking(false);
+    }
+  };
+
+  const handleSendChannelMessage = async (payload: {
+    content: string;
+    attachmentUrl?: string;
+    attachmentName?: string;
+    replyTo?: ChatMessage | null;
+  }) => {
+    if (!activeServer || !activeChannel) return;
+
+    await sendChannelMessage(
+      activeServer.id,
+      activeChannel.id,
+      `#${activeChannel.name}`,
+      profile,
+      myMemberRecord?.roleColor || '#DBDEE1',
+      payload
+    );
+
+    const trimmed = payload.content.trim();
+    if (!trimmed) return;
+
+    const enabledBots =
+      activeServer.enabledBots && activeServer.enabledBots.length > 0
+        ? activeServer.enabledBots
+        : ['turcord_bot', 'mod_bot', 'music_bot'];
+
+    const lower = trimmed.toLowerCase();
+
+    if (lower === '/yardim') {
+      if (!enabledBots.includes('turcord_bot')) return;
+      await sendBotChannelMessage(
+        activeServer.id,
+        activeChannel.id,
+        'turcord_bot',
+        [
+          '🤖 **Turcord Sunucu Bot Komutları**',
+          '• `/turcord <soru>` veya `@Turcord <soru>` — Turcord Yapay Zeka Botu ile sohbet et',
+          '• `/durum` — Canlı sunucu & ses bağlantı durumunu gör',
+          '• `/oylama <konu>` — Hızlı 👍 / 👎 oylaması başlat',
+          '• `/duyuru <metin>` — Resmi duyuru kartı paylaş (Moderatör)',
+          '• `/zar [üst]` · `/yazi-tura` · `/8ball <soru>` — Turcord Eğlence mini oyunları',
+          '• `/temizle <sayı>` — Son N mesajı sil (Moderatör)',
+        ].join('\n')
+      );
+      return;
+    }
+
+    if (lower === '/durum') {
+      if (!enabledBots.includes('turcord_bot')) return;
+      await sendBotChannelMessage(
+        activeServer.id,
+        activeChannel.id,
+        'turcord_bot',
+        [
+          `🩺 **#${activeChannel.name} Kanal & Bağlantı Durumu**`,
+          `• Sunucu: **${activeServer.name}** (${members.length} üye)`,
+          `• WebSocket: **${rt.wsConnected ? 'Bağlı' : 'Yeniden bağlanıyor'}**`,
+          `• Aktif Ses Odası: **${rt.activeVoiceRoomKey ? rt.activeVoiceLabel : 'Yok'}**`,
+          `• Aktif Botlar: ${enabledBots.join(', ')}`,
+        ].join('\n')
+      );
+      return;
+    }
+
+    if (lower.startsWith('/oylama')) {
+      if (!enabledBots.includes('turcord_bot')) return;
+      const topic = trimmed.slice('/oylama'.length).trim();
+      await sendBotChannelMessage(
+        activeServer.id,
+        activeChannel.id,
+        'turcord_bot',
+        topic
+          ? `📊 **Oylama (${profile.displayName}):** ${topic}\n👍 Evet · 👎 Hayır _(Tepki ekleyerek oy kullanabilirsin)_`
+          : '📊 Kullanım: `/oylama Akşam turnuva yapalım mı?`'
+      );
+      return;
+    }
+
+    if (lower.startsWith('/duyuru')) {
+      if (!enabledBots.includes('turcord_bot')) return;
+      if (!canModerate) {
+        await sendBotChannelMessage(
+          activeServer.id,
+          activeChannel.id,
+          'turcord_bot',
+          '🔒 `/duyuru` komutunu yalnızca moderatörler veya sunucu yöneticileri kullanabilir.'
+        );
+        return;
+      }
+      const body = trimmed.slice('/duyuru'.length).trim();
+      await sendBotChannelMessage(
+        activeServer.id,
+        activeChannel.id,
+        'turcord_bot',
+        body
+          ? `📢 **Resmi Sunucu Duyurusu**\n${body}\n\n_Yayınlayan: ${profile.displayName}_`
+          : '📢 Kullanım: `/duyuru Yarın saat 21:00’da sesli etkinlik var!`'
+      );
+      return;
+    }
+
+    if (lower === '/zar' || lower.startsWith('/zar ')) {
+      if (!enabledBots.includes('music_bot')) return;
+      const rawMax = Number.parseInt(trimmed.slice('/zar'.length).trim(), 10);
+      const max = Number.isFinite(rawMax) ? Math.min(10000, Math.max(2, rawMax)) : 6;
+      const roll = Math.floor(Math.random() * max) + 1;
+      await sendBotChannelMessage(
+        activeServer.id,
+        activeChannel.id,
+        'music_bot',
+        `🎲 **${profile.displayName}** zar attı (1-${max}): **${roll}** geldi!`
+      );
+      return;
+    }
+
+    if (lower === '/yazi-tura') {
+      if (!enabledBots.includes('music_bot')) return;
+      const outcome = Math.random() < 0.5 ? 'Yazı' : 'Tura';
+      await sendBotChannelMessage(
+        activeServer.id,
+        activeChannel.id,
+        'music_bot',
+        `🪙 **${profile.displayName}** para çevirdi: **${outcome}** geldi!`
+      );
+      return;
+    }
+
+    if (lower.startsWith('/8ball')) {
+      if (!enabledBots.includes('music_bot')) return;
+      const answers = [
+        'Kesinlikle evet.',
+        'Büyük ihtimalle evet.',
+        'Şu an belirsiz, biraz sonra tekrar sor.',
+        'Odaklan ve tekrar dene.',
+        'Pek iyi görünmüyor.',
+        'Kesinlikle hayır.',
+        'Görünüşe göre harika olacak!',
+        'Şüpheli, temkinli ol.',
+      ];
+      const q = trimmed.slice('/8ball'.length).trim();
+      const ans = answers[Math.floor(Math.random() * answers.length)];
+      await sendBotChannelMessage(
+        activeServer.id,
+        activeChannel.id,
+        'music_bot',
+        `🎱 **Sihirli Küre${q ? ` (${q})` : ''}:** ${ans}`
+      );
+      return;
+    }
+
+    if (lower.startsWith('/temizle')) {
+      if (!enabledBots.includes('mod_bot')) return;
+      if (!canModerate) {
+        await sendBotChannelMessage(
+          activeServer.id,
+          activeChannel.id,
+          'mod_bot',
+          '🛡️ `/temizle` komutu için moderatör veya yönetici yetkisi gerekir.'
+        );
+        return;
+      }
+      const rawCount = Number.parseInt(trimmed.slice('/temizle'.length).trim(), 10);
+      const count = Number.isFinite(rawCount) ? Math.min(20, Math.max(1, rawCount)) : 5;
+      const targets = channelMessages.slice(-count);
+      await Promise.all(
+        targets.map((m) => deleteChannelMessage(activeServer.id, activeChannel.id, m.id).catch(() => {}))
+      );
+      await sendBotChannelMessage(
+        activeServer.id,
+        activeChannel.id,
+        'mod_bot',
+        `🛡️ **Turcord Muhafız:** ${targets.length} mesaj temizlendi (Yetkili: ${profile.displayName}).`
+      );
+      return;
+    }
+
+    const isTurcordCmd = lower === '/turcord' || lower.startsWith('/turcord ');
+    const isTurcordMention = /@turcord\b/i.test(trimmed);
+    if (isTurcordCmd || isTurcordMention) {
+      if (!enabledBots.includes('turcord_bot')) return;
+      const prompt = isTurcordCmd
+        ? trimmed.slice('/turcord'.length).trim()
+        : trimmed.replace(/@turcord\b/gi, '').trim();
+
+      if (!prompt) {
+        await sendBotChannelMessage(
+          activeServer.id,
+          activeChannel.id,
+          'turcord_bot',
+          '💬 Bana bir soru yaz! Örnek: `/turcord Bu akşam oyun gecesi için fikir ver`'
+        );
+        return;
+      }
+
+      setBotThinking(true);
+      try {
+        const history = channelMessages.slice(-8).map((m) => ({
+          author: m.authorName,
+          content: m.content,
+        }));
+        const reply = await requestTurcordBotReply({
+          prompt,
+          userDisplayName: profile.displayName,
+          contextType: 'channel',
+          serverName: activeServer.name,
+          channelName: activeChannel.name,
+          history,
+        });
+        await sendBotChannelMessage(activeServer.id, activeChannel.id, 'turcord_bot', reply);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Bilinmeyen sunucu hatası.';
+        await sendBotChannelMessage(
+          activeServer.id,
+          activeChannel.id,
+          'turcord_bot',
+          `⚠️ **Turcord Bot yanıt veremedi:** ${msg}`
+        );
+      } finally {
+        setBotThinking(false);
+      }
+    }
+  };
+
   return (
     <div className="h-screen w-screen overflow-hidden bg-[var(--bg-rail)] text-[var(--text-primary)] flex flex-col">
       {/* Mobile Top Drawer Toggle */}
@@ -420,7 +757,7 @@ function HalkaApp() {
           className="inline-flex items-center gap-2 text-sm font-medium text-white"
         >
           <Menu className="w-5 h-5" />
-          <span>{activeView === 'server' && activeServer ? activeServer.name : 'Halka'}</span>
+          <span>{activeView === 'server' && activeServer ? activeServer.name : 'Turcord'}</span>
         </button>
         <div className="flex items-center gap-2">
           <button
@@ -537,6 +874,8 @@ function HalkaApp() {
             screenSharing={rt.screenSharing}
             voiceError={rt.voiceError}
             unreadNotificationsCount={unreadNotificationsCount}
+            botThinking={botThinking}
+            onRunBotDiagnostics={runBotDiagnostics}
             onSelectFriendsTab={() => setActiveDmThreadId(null)}
             onSelectDmThread={(tid) => setActiveDmThreadId(tid)}
             onOpenDmWithUser={handleOpenDmWithUser}
@@ -544,7 +883,7 @@ function HalkaApp() {
             onSendFriendRequest={(uname) => sendFriendRequestByUsername(profile, uname)}
             onAcceptFriendRequest={acceptFriendRequest}
             onRemoveFriendOrRequest={removeFriendOrRequest}
-            onSendDmMessage={(payload) => sendDmMessage(activeDmThreadId!, profile, payload)}
+            onSendDmMessage={handleSendDmMessage}
             onEditDmMessage={(msgId, content) => editDmMessage(activeDmThreadId!, msgId, content)}
             onDeleteDmMessage={(msgId) => deleteDmMessage(activeDmThreadId!, msgId)}
             onToggleDmReaction={(msg, em) => toggleDmReaction(activeDmThreadId!, msg, em, profile.uid)}
@@ -603,21 +942,16 @@ function HalkaApp() {
                 currentUid={profile.uid}
                 canModerate={canModerate}
                 canPin={canModerate}
+                compactMode={Boolean(profile.compactMode)}
+                enableSlashCommands
+                enabledBots={activeServer.enabledBots || ['turcord_bot', 'mod_bot', 'music_bot']}
+                botThinking={botThinking}
                 showMemberList={showMemberList}
                 showTypingIndicator={profile.showTypingIndicator ?? true}
                 onToggleMemberList={() => setShowMemberList((s) => !s)}
                 typingUsers={rt.typingUsers}
                 onTyping={rt.sendTyping}
-                onSendMessage={(payload) =>
-                  sendChannelMessage(
-                    activeServer.id,
-                    activeChannel.id,
-                    `#${activeChannel.name}`,
-                    profile,
-                    myMemberRecord?.roleColor || '#DBDEE1',
-                    payload
-                  )
-                }
+                onSendMessage={handleSendChannelMessage}
                 onEditMessage={(msgId, content) =>
                   editChannelMessage(activeServer.id, activeChannel.id, msgId, content)
                 }
@@ -740,6 +1074,7 @@ function HalkaApp() {
           onClose={() => setSelectedProfileUid(null)}
           onEditOwnProfile={() => setUserSettingsOpen(true)}
           onOpenShop={() => setShopTab('shop')}
+          onOpenBotDm={handleOpenBotDm}
           onStartDm={(user) => handleOpenDmWithUser(user)}
           onAddFriend={(uid) => sendFriendRequestByUid(profile, uid)}
         />
@@ -837,9 +1172,12 @@ function HalkaApp() {
         <UserSettingsModal
           profile={profile}
           unreadNotificationsCount={unreadNotificationsCount}
+          wsConnected={rt.wsConnected}
           onClose={() => setUserSettingsOpen(false)}
           onOpenShop={(tab) => setShopTab(tab)}
           onOpenNotifications={() => setNotificationsOpen(true)}
+          onOpenBotDm={handleOpenBotDm}
+          onRunDiagnostics={runBotDiagnostics}
           onSave={(updates) => updateUserProfile(profile.uid, profile.username, updates)}
           onSignOut={async () => {
             rt.leaveVoice();

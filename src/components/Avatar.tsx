@@ -1,6 +1,7 @@
 import React from 'react';
-import { Gem } from 'lucide-react';
-import type { AvatarDecorationId, UserStatus } from '../types/halka';
+import { Bot, Check, Gem, Music, Shield } from 'lucide-react';
+import type { AvatarDecorationId, BotId, UserStatus } from '../types/halka';
+import { isOfficialBotUid, OFFICIAL_BOTS } from '../lib/turcordBots';
 
 interface AvatarProps {
   src?: string;
@@ -11,6 +12,7 @@ interface AvatarProps {
   speaking?: boolean;
   ringBg?: string;
   decoration?: AvatarDecorationId;
+  botId?: string;
 }
 
 const SIZE_CLASSES: Record<NonNullable<AvatarProps['size']>, string> = {
@@ -19,6 +21,14 @@ const SIZE_CLASSES: Record<NonNullable<AvatarProps['size']>, string> = {
   md: 'w-10 h-10 text-sm',
   lg: 'w-14 h-14 text-lg',
   xl: 'w-20 h-20 text-2xl',
+};
+
+const BOT_ICON_CLASSES: Record<NonNullable<AvatarProps['size']>, string> = {
+  xs: 'w-3.5 h-3.5',
+  sm: 'w-4 h-4',
+  md: 'w-5 h-5',
+  lg: 'w-7 h-7',
+  xl: 'w-10 h-10',
 };
 
 const DOT_CLASSES: Record<NonNullable<AvatarProps['size']>, string> = {
@@ -47,7 +57,7 @@ const DECO_CLASS: Record<AvatarDecorationId, string> = {
 
 function getInitials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return 'H';
+  if (parts.length === 0) return 'T';
   if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
   return (parts[0][0] + parts[1][0]).toUpperCase();
 }
@@ -61,6 +71,22 @@ function getBgColor(name: string): string {
   return colors[Math.abs(hash) % colors.length];
 }
 
+function renderBotAvatar(botId: BotId, size: NonNullable<AvatarProps['size']>) {
+  const bot = OFFICIAL_BOTS[botId];
+  const iconCls = BOT_ICON_CLASSES[size];
+  const Icon = botId === 'mod_bot' ? Shield : botId === 'music_bot' ? Music : Bot;
+  return (
+    <div
+      style={{
+        background: `linear-gradient(135deg, ${bot.bannerColor}, #1E1F22)`,
+      }}
+      className="w-full h-full rounded-full flex items-center justify-center text-white border border-white/15"
+    >
+      <Icon className={iconCls} />
+    </div>
+  );
+}
+
 export const Avatar: React.FC<AvatarProps> = ({
   src,
   name,
@@ -70,11 +96,13 @@ export const Avatar: React.FC<AvatarProps> = ({
   speaking = false,
   ringBg = 'var(--bg-sidebar)',
   decoration = 'none',
+  botId,
 }) => {
   const [imgFailed, setImgFailed] = React.useState(false);
   const sizeClass = SIZE_CLASSES[size];
   const dotClass = DOT_CLASSES[size];
   const decoClass = decoration && decoration !== 'none' ? DECO_CLASS[decoration] : '';
+  const isOfficialBot = botId && isOfficialBotUid(botId);
 
   return (
     <div
@@ -82,7 +110,9 @@ export const Avatar: React.FC<AvatarProps> = ({
         speaking ? 'ring-2 ring-[#23A55A] ring-offset-2 ring-offset-[#111216]' : ''
       }`}
     >
-      {src && !imgFailed ? (
+      {isOfficialBot ? (
+        renderBotAvatar(botId, size)
+      ) : src && !imgFailed ? (
         <img
           src={src}
           alt={name}
@@ -109,6 +139,13 @@ export const Avatar: React.FC<AvatarProps> = ({
     </div>
   );
 };
+
+export const VerifiedBotBadge: React.FC<{ label?: string }> = ({ label = 'UYG' }) => (
+  <span className="inline-flex items-center gap-0.5 px-1.5 py-[1px] rounded bg-[#5865F2] text-[10px] font-bold tracking-wide text-white uppercase shrink-0 leading-tight">
+    <Check className="w-2.5 h-2.5 stroke-[3]" />
+    <span>{label}</span>
+  </span>
+);
 
 export const ClanTagBadge: React.FC<{ tag?: string }> = ({ tag }) => {
   if (!tag) return null;

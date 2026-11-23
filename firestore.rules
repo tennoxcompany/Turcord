@@ -54,7 +54,7 @@ service cloud.firestore {
     // --- Entity Validation Blueprints ---
     function isValidPublicProfile(data, uid) {
       return data.keys().hasAll(['uid', 'username', 'displayName', 'avatarUrl', 'bannerColor', 'bio', 'status', 'customStatus', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['uid', 'username', 'displayName', 'avatarUrl', 'bannerColor', 'bio', 'status', 'customStatus', 'clanTag', 'avatarDecoration', 'orbsBalance', 'connections', 'theme', 'showTypingIndicator', 'mentionNotifs', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'username', 'displayName', 'avatarUrl', 'bannerColor', 'bio', 'status', 'customStatus', 'clanTag', 'avatarDecoration', 'orbsBalance', 'connections', 'theme', 'showTypingIndicator', 'mentionNotifs', 'botAlerts', 'compactMode', 'noiseSuppression', 'createdAt', 'updatedAt'])
         && data.uid == uid
         && isValidUsername(data.username)
         && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 40
@@ -70,6 +70,9 @@ service cloud.firestore {
         && (!('theme' in data) || (data.theme in ['oniks', 'koyu', 'gece']))
         && (!('showTypingIndicator' in data) || (data.showTypingIndicator is bool))
         && (!('mentionNotifs' in data) || (data.mentionNotifs is bool))
+        && (!('botAlerts' in data) || (data.botAlerts is bool))
+        && (!('compactMode' in data) || (data.compactMode is bool))
+        && (!('noiseSuppression' in data) || (data.noiseSuppression is bool))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -139,7 +142,7 @@ service cloud.firestore {
 
     function isValidServer(data, serverId) {
       return data.keys().hasAll(['id', 'name', 'description', 'iconEmoji', 'iconColor', 'ownerId', 'isPublic', 'inviteCode', 'memberCount', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['id', 'name', 'description', 'iconEmoji', 'iconColor', 'ownerId', 'isPublic', 'inviteCode', 'memberCount', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'name', 'description', 'iconEmoji', 'iconColor', 'ownerId', 'isPublic', 'inviteCode', 'memberCount', 'enabledBots', 'createdAt', 'updatedAt'])
         && data.id == serverId && isValidId(data.id)
         && data.name is string && data.name.size() >= 1 && data.name.size() <= 60
         && data.description is string && data.description.size() <= 300
@@ -149,6 +152,7 @@ service cloud.firestore {
         && data.isPublic is bool
         && data.inviteCode is string && data.inviteCode.size() >= 4 && data.inviteCode.size() <= 24 && data.inviteCode.matches('^[a-zA-Z0-9_\\-]+$')
         && data.memberCount is int && data.memberCount >= 1
+        && (!('enabledBots' in data) || (data.enabledBots is list && data.enabledBots.size() <= 10))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -197,7 +201,7 @@ service cloud.firestore {
 
     function isValidChannelMessage(data, serverId, channelId, messageId) {
       return data.keys().hasAll(['id', 'serverId', 'channelId', 'authorId', 'authorName', 'authorAvatar', 'authorRoleColor', 'content', 'attachmentUrl', 'attachmentName', 'replyToId', 'replyToAuthor', 'replyToContent', 'reactions', 'pinned', 'edited', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['id', 'serverId', 'channelId', 'authorId', 'authorName', 'authorAvatar', 'authorRoleColor', 'content', 'attachmentUrl', 'attachmentName', 'replyToId', 'replyToAuthor', 'replyToContent', 'reactions', 'pinned', 'edited', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'serverId', 'channelId', 'authorId', 'authorName', 'authorAvatar', 'authorRoleColor', 'content', 'attachmentUrl', 'attachmentName', 'replyToId', 'replyToAuthor', 'replyToContent', 'reactions', 'pinned', 'edited', 'isBot', 'createdAt', 'updatedAt'])
         && data.id == messageId && isValidId(data.id)
         && data.serverId == serverId && data.channelId == channelId
         && data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128
@@ -214,6 +218,7 @@ service cloud.firestore {
         && data.reactions is map && data.reactions.size() <= 30
         && data.pinned is bool
         && data.edited is bool
+        && (!('isBot' in data) || (data.isBot is bool))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -239,12 +244,13 @@ service cloud.firestore {
 
     function isValidDmThread(data, threadId) {
       return data.keys().hasAll(['id', 'participants', 'participantProfiles', 'lastMessage', 'lastMessageAt', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['id', 'participants', 'participantProfiles', 'isGroup', 'groupName', 'lastMessage', 'lastMessageAt', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'participants', 'participantProfiles', 'isGroup', 'isBotThread', 'groupName', 'lastMessage', 'lastMessageAt', 'createdAt', 'updatedAt'])
         && data.id == threadId && data.id is string && data.id.size() >= 1 && data.id.size() <= 256 && data.id.matches('^[a-zA-Z0-9_\\-]+$')
         && data.participants is list && data.participants.size() >= 2 && data.participants.size() <= 10
         && data.participants[0] is string && data.participants[1] is string
         && data.participantProfiles is map && data.participantProfiles.size() >= 2 && data.participantProfiles.size() <= 10
         && (!('isGroup' in data) || (data.isGroup is bool))
+        && (!('isBotThread' in data) || (data.isBotThread is bool))
         && (!('groupName' in data) || (data.groupName is string && data.groupName.size() <= 60))
         && data.lastMessage is string && data.lastMessage.size() <= 200
         && data.lastMessageAt is timestamp
@@ -254,7 +260,7 @@ service cloud.firestore {
 
     function isValidDmMessage(data, threadId, messageId) {
       return data.keys().hasAll(['id', 'threadId', 'authorId', 'authorName', 'authorAvatar', 'content', 'attachmentUrl', 'attachmentName', 'replyToId', 'replyToAuthor', 'replyToContent', 'reactions', 'edited', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['id', 'threadId', 'authorId', 'authorName', 'authorAvatar', 'content', 'attachmentUrl', 'attachmentName', 'replyToId', 'replyToAuthor', 'replyToContent', 'reactions', 'edited', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'threadId', 'authorId', 'authorName', 'authorAvatar', 'content', 'attachmentUrl', 'attachmentName', 'replyToId', 'replyToAuthor', 'replyToContent', 'reactions', 'edited', 'isBot', 'createdAt', 'updatedAt'])
         && data.id == messageId && isValidId(data.id)
         && data.threadId == threadId
         && data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128
@@ -269,6 +275,7 @@ service cloud.firestore {
         && data.replyToContent is string && data.replyToContent.size() <= 200
         && data.reactions is map && data.reactions.size() <= 30
         && data.edited is bool
+        && (!('isBot' in data) || (data.isBot is bool))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -285,7 +292,7 @@ service cloud.firestore {
         && incoming().uid == existing().uid
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
-        && incoming().diff(existing()).affectedKeys().hasOnly(['username', 'displayName', 'avatarUrl', 'bannerColor', 'bio', 'status', 'customStatus', 'clanTag', 'avatarDecoration', 'orbsBalance', 'connections', 'theme', 'showTypingIndicator', 'mentionNotifs', 'updatedAt']);
+        && incoming().diff(existing()).affectedKeys().hasOnly(['username', 'displayName', 'avatarUrl', 'bannerColor', 'bio', 'status', 'customStatus', 'clanTag', 'avatarDecoration', 'orbsBalance', 'connections', 'theme', 'showTypingIndicator', 'mentionNotifs', 'botAlerts', 'compactMode', 'noiseSuppression', 'updatedAt']);
       allow delete: if false;
 
       match /private/{docId} {
@@ -322,7 +329,8 @@ service cloud.firestore {
         allow get: if isOwner(userId) && isValidId(notifId);
         allow list: if isOwner(userId);
         allow create: if isSignedIn() && isValidId(notifId) && isValidUserNotification(incoming(), notifId)
-          && incoming().fromUid == request.auth.uid && incoming().isRead == false && incoming().createdAt == request.time;
+          && (incoming().fromUid == request.auth.uid || (userId == request.auth.uid && incoming().fromUid == 'turcord_bot'))
+          && incoming().isRead == false && incoming().createdAt == request.time;
         allow update: if isOwner(userId) && isValidId(notifId) && isValidUserNotification(incoming(), notifId)
           && incoming().diff(existing()).affectedKeys().hasOnly(['isRead']);
         allow delete: if isOwner(userId) && isValidId(notifId);
@@ -368,7 +376,7 @@ service cloud.firestore {
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
         && (
-          (isServerAdmin(serverId) && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'description', 'iconEmoji', 'iconColor', 'isPublic', 'inviteCode', 'memberCount', 'updatedAt'])) ||
+          (isServerAdmin(serverId) && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'description', 'iconEmoji', 'iconColor', 'isPublic', 'inviteCode', 'memberCount', 'enabledBots', 'updatedAt'])) ||
           (isSignedIn() && incoming().diff(existing()).affectedKeys().hasOnly(['memberCount', 'updatedAt'])
             && (
               (incoming().memberCount == existing().memberCount + 1 && existsAfter(/databases/$(database)/documents/servers/$(serverId)/members/$(request.auth.uid))) ||
@@ -430,7 +438,10 @@ service cloud.firestore {
           allow list: if isServerMember(serverId);
           allow create: if isValidId(serverId) && isValidId(channelId) && isValidId(messageId) && isServerMember(serverId)
             && isValidChannelMessage(incoming(), serverId, channelId, messageId)
-            && incoming().authorId == request.auth.uid
+            && (
+              (incoming().authorId == request.auth.uid && (!('isBot' in incoming()) || incoming().isBot == false)) ||
+              (incoming().authorId in ['turcord_bot', 'mod_bot', 'music_bot'] && ('isBot' in incoming()) && incoming().isBot == true)
+            )
             && incoming().pinned == false
             && incoming().edited == false
             && incoming().createdAt == request.time && incoming().updatedAt == request.time;
@@ -509,7 +520,10 @@ service cloud.firestore {
         allow list: if isDmParticipant(threadId);
         allow create: if isValidId(threadId) && isValidId(messageId) && isDmParticipant(threadId)
           && isValidDmMessage(incoming(), threadId, messageId)
-          && incoming().authorId == request.auth.uid
+          && (
+            (incoming().authorId == request.auth.uid && (!('isBot' in incoming()) || incoming().isBot == false)) ||
+            (incoming().authorId in ['turcord_bot', 'mod_bot', 'music_bot'] && ('isBot' in incoming()) && incoming().isBot == true)
+          )
           && incoming().edited == false
           && incoming().createdAt == request.time && incoming().updatedAt == request.time;
         allow update: if isValidId(threadId) && isValidId(messageId) && isDmParticipant(threadId)
@@ -523,7 +537,10 @@ service cloud.firestore {
             (existing().authorId == request.auth.uid && incoming().edited == true && incoming().diff(existing()).affectedKeys().hasOnly(['content', 'edited', 'updatedAt'])) ||
             (incoming().diff(existing()).affectedKeys().hasOnly(['reactions', 'updatedAt']))
           );
-        allow delete: if isValidId(threadId) && isValidId(messageId) && isOwner(existing().authorId);
+        allow delete: if isValidId(threadId) && isValidId(messageId) && (
+          isOwner(existing().authorId) ||
+          (existing().authorId in ['turcord_bot', 'mod_bot', 'music_bot'] && isDmParticipant(threadId))
+        );
       }
     }
   }

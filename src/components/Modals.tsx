@@ -1,11 +1,14 @@
 import React, { useEffect, useState } from 'react';
 import {
+  Activity,
   Bell,
+  Bot,
   Check,
   ChevronLeft,
   ChevronRight,
   Compass,
   Copy,
+  Cpu,
   Gem,
   Globe,
   Hash,
@@ -19,6 +22,7 @@ import {
   Palette,
   Plus,
   Search,
+  Shield,
   Sparkles,
   Trash2,
   User,
@@ -28,6 +32,7 @@ import {
 } from 'lucide-react';
 import type {
   AppearanceTheme,
+  BotId,
   ChannelType,
   MemberRole,
   PublicProfile,
@@ -37,7 +42,8 @@ import type {
   UserStatus,
 } from '../types/halka';
 import { fetchPublicServers, ROLE_LABELS, updateUserPreferences } from '../lib/halkaService';
-import { Avatar } from './Avatar';
+import { OFFICIAL_BOTS } from '../lib/turcordBots';
+import { Avatar, VerifiedBotBadge } from './Avatar';
 
 const SERVER_COLORS = ['#5865F2', '#248046', '#DA373C', '#9B59B6', '#E67E22', '#0EA5E9'];
 const SERVER_EMOJIS = ['⚡', '🎮', '💻', '🎧', '🚀', '☕', '🛡️', '🇹🇷'];
@@ -522,7 +528,14 @@ interface ServerSettingsModalProps {
   members: ServerMember[];
   myRole: MemberRole;
   onClose: () => void;
-  onSave: (updates: { name: string; description: string; iconEmoji: string; iconColor: string; isPublic: boolean }) => Promise<void>;
+  onSave: (updates: {
+    name: string;
+    description: string;
+    iconEmoji: string;
+    iconColor: string;
+    isPublic: boolean;
+    enabledBots?: string[];
+  }) => Promise<void>;
   onChangeRole: (member: ServerMember, role: Exclude<MemberRole, 'owner'>) => Promise<void>;
   onKick: (member: ServerMember) => Promise<void>;
   onDeleteServer: () => Promise<void>;
@@ -538,12 +551,17 @@ export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
   onKick,
   onDeleteServer,
 }) => {
-  const [tab, setTab] = useState<'general' | 'members'>('general');
+  const [tab, setTab] = useState<'general' | 'members' | 'bots'>('general');
   const [name, setName] = useState(server.name);
   const [description, setDescription] = useState(server.description);
   const [iconEmoji, setIconEmoji] = useState(server.iconEmoji);
   const [iconColor, setIconColor] = useState(server.iconColor);
   const [isPublic, setIsPublic] = useState(server.isPublic);
+  const [enabledBots, setEnabledBots] = useState<string[]>(
+    server.enabledBots && server.enabledBots.length > 0
+      ? server.enabledBots
+      : ['turcord_bot', 'mod_bot', 'music_bot']
+  );
   const [saving, setSaving] = useState(false);
 
   const handleSave = async (e: React.FormEvent) => {
@@ -551,20 +569,34 @@ export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
     if (!name.trim() || saving) return;
     setSaving(true);
     try {
-      await onSave({ name, description, iconEmoji, iconColor, isPublic });
+      await onSave({ name, description, iconEmoji, iconColor, isPublic, enabledBots });
       onClose();
     } finally {
       setSaving(false);
     }
   };
 
+  const toggleBot = async (botId: BotId) => {
+    const exists = enabledBots.includes(botId);
+    const next = exists ? enabledBots.filter((b) => b !== botId) : [...enabledBots, botId];
+    setEnabledBots(next);
+    await onSave({
+      name,
+      description,
+      iconEmoji,
+      iconColor,
+      isPublic,
+      enabledBots: next,
+    });
+  };
+
   return (
     <ModalShell title="Sunucu Ayarları" onClose={onClose} maxWidth="max-w-xl">
       <div className="space-y-5">
-        <div className="flex items-center gap-2 border-b border-[var(--border-subtle)] pb-3">
+        <div className="flex items-center gap-2 border-b border-[var(--border-subtle)] pb-3 overflow-x-auto">
           <button
             onClick={() => setTab('general')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer ${
+            className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap cursor-pointer ${
               tab === 'general' ? 'bg-[#5865F2] text-white' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-card)]'
             }`}
           >
@@ -572,12 +604,21 @@ export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
           </button>
           <button
             onClick={() => setTab('members')}
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer ${
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap cursor-pointer ${
               tab === 'members' ? 'bg-[#5865F2] text-white' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-card)]'
             }`}
           >
             <Users className="w-3.5 h-3.5" />
             <span>Üyeler &amp; Roller ({members.length})</span>
+          </button>
+          <button
+            onClick={() => setTab('bots')}
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap cursor-pointer ${
+              tab === 'bots' ? 'bg-[#5865F2] text-white' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-card)]'
+            }`}
+          >
+            <Bot className="w-3.5 h-3.5" />
+            <span>Botlar &amp; Otomasyon</span>
           </button>
         </div>
 
@@ -677,7 +718,7 @@ export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
               </button>
             </div>
           </form>
-        ) : (
+        ) : tab === 'members' ? (
           <div className="space-y-2">
             {members.map((m) => (
               <div
@@ -716,21 +757,83 @@ export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
               </div>
             ))}
           </div>
+        ) : (
+          <div className="space-y-3">
+            <p className="text-xs text-[var(--text-muted)]">
+              Sunucunda aktif olacak resmi Turcord botlarını yönetebilirsin. Kanalda <code className="px-1 py-0.5 rounded bg-[var(--bg-card)] text-white">/</code> yazarak tüm komutlara erişilebilir.
+            </p>
+            {(Object.values(OFFICIAL_BOTS) as Array<(typeof OFFICIAL_BOTS)[BotId]>).map((bot) => {
+              const active = enabledBots.includes(bot.id);
+              return (
+                <div
+                  key={bot.id}
+                  className="p-4 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-subtle)] space-y-2.5"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <Avatar name={bot.name} size="md" botId={bot.id} />
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="text-sm font-semibold text-white">{bot.name}</span>
+                          <VerifiedBotBadge />
+                        </div>
+                        <p className="text-xs text-[var(--text-muted)]">{bot.tagline}</p>
+                      </div>
+                    </div>
+                    <label className="inline-flex items-center gap-2 cursor-pointer shrink-0">
+                      <input
+                        type="checkbox"
+                        checked={active}
+                        onChange={() => toggleBot(bot.id)}
+                        className="w-4 h-4 accent-[#5865F2]"
+                      />
+                      <span className="text-xs font-medium text-white">{active ? 'Aktif' : 'Kapalı'}</span>
+                    </label>
+                  </div>
+                  <p className="text-xs text-[var(--text-secondary)] leading-relaxed">{bot.description}</p>
+                  <div className="flex flex-wrap gap-1.5 pt-1">
+                    {bot.commands.map((c) => (
+                      <span
+                        key={c.cmd}
+                        title={c.desc}
+                        className="px-2 py-0.5 rounded bg-[var(--bg-surface)] border border-[var(--border-subtle)] font-mono text-[11px] text-[#A5B4FC]"
+                      >
+                        {c.cmd}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         )}
       </div>
     </ModalShell>
   );
 };
 
-// 6. Categorized Discord Onyx User Settings Modal (Screenshots 1-5)
-type SettingsSubPage = 'menu' | 'account' | 'connections' | 'appearance' | 'voice' | 'chat' | 'notifications';
+// 6. Categorized Discord Onyx User Settings Modal
+type SettingsSubPage =
+  | 'menu'
+  | 'account'
+  | 'privacy'
+  | 'connections'
+  | 'bot'
+  | 'appearance'
+  | 'voice'
+  | 'chat'
+  | 'notifications'
+  | 'advanced';
 
 interface UserSettingsModalProps {
   profile: PublicProfile;
   unreadNotificationsCount: number;
+  wsConnected?: boolean;
   onClose: () => void;
   onOpenShop: (tab: 'shop' | 'quests') => void;
   onOpenNotifications: () => void;
+  onOpenBotDm?: () => void;
+  onRunDiagnostics?: () => Promise<void> | void;
   onSave: (updates: {
     displayName: string;
     username: string;
@@ -748,9 +851,12 @@ interface UserSettingsModalProps {
 export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   profile,
   unreadNotificationsCount,
+  wsConnected = false,
   onClose,
   onOpenShop,
   onOpenNotifications,
+  onOpenBotDm,
+  onRunDiagnostics,
   onSave,
   onSignOut,
 }) => {
@@ -774,10 +880,34 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   const [savedNotice, setSavedNotice] = useState(false);
   const [micLevel, setMicLevel] = useState(0);
   const [testingMic, setTestingMic] = useState(false);
+  const [audioInputs, setAudioInputs] = useState<MediaDeviceInfo[]>([]);
+  const [audioOutputs, setAudioOutputs] = useState<MediaDeviceInfo[]>([]);
+  const [selectedMicId, setSelectedMicId] = useState('');
+  const [selectedSpeakerId, setSelectedSpeakerId] = useState('');
+  const [diagSent, setDiagSent] = useState(false);
+  const [copiedId, setCopiedId] = useState(false);
 
   const activeTheme: AppearanceTheme = profile.theme || 'oniks';
   const showTyping = profile.showTypingIndicator ?? true;
   const mentionNotifs = profile.mentionNotifs ?? true;
+  const botAlerts = profile.botAlerts ?? true;
+  const compactMode = profile.compactMode ?? false;
+  const noiseSuppression = profile.noiseSuppression ?? true;
+
+  useEffect(() => {
+    if (subPage !== 'voice' || !navigator.mediaDevices?.enumerateDevices) return;
+    navigator.mediaDevices
+      .enumerateDevices()
+      .then((devices) => {
+        const inputs = devices.filter((d) => d.kind === 'audioinput');
+        const outputs = devices.filter((d) => d.kind === 'audiooutput');
+        setAudioInputs(inputs);
+        setAudioOutputs(outputs);
+        if (!selectedMicId && inputs[0]?.deviceId) setSelectedMicId(inputs[0].deviceId);
+        if (!selectedSpeakerId && outputs[0]?.deviceId) setSelectedSpeakerId(outputs[0].deviceId);
+      })
+      .catch(() => {});
+  }, [subPage, selectedMicId, selectedSpeakerId]);
 
   useEffect(() => {
     if (!testingMic) return;
@@ -787,7 +917,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     let timer = 0;
 
     navigator.mediaDevices
-      .getUserMedia({ audio: true })
+      .getUserMedia({
+        audio: selectedMicId ? { deviceId: { exact: selectedMicId }, noiseSuppression } : { noiseSuppression },
+      })
       .then((s) => {
         if (cancelled) {
           s.getTracks().forEach((t) => t.stop());
@@ -818,7 +950,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       ctx?.close().catch(() => {});
       setMicLevel(0);
     };
-  }, [testingMic]);
+  }, [testingMic, selectedMicId, noiseSuppression]);
 
   const handleSaveProfile = async (e?: React.FormEvent) => {
     e?.preventDefault();
@@ -852,11 +984,14 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   const subTitles: Record<SettingsSubPage, string> = {
     menu: 'Ayarlar',
     account: 'Hesap & Profil',
+    privacy: 'Gizlilik & Güvenlik',
     connections: 'Bağlantılar',
+    bot: 'Turcord Resmi Botu & Destek',
     appearance: 'Görünüm',
     voice: 'Ses ve Görüntü',
     chat: 'Sohbet & Yazıyor Göstergesi',
     notifications: 'Bildirimler',
+    advanced: 'Gelişmiş & Sistem',
   };
 
   return (
@@ -909,7 +1044,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
                   type="text"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Ara"
+                  placeholder="Ayarlarda ara"
                   className="flex-1 bg-transparent text-sm text-white placeholder-[var(--text-muted)] outline-none"
                 />
                 {search && (
@@ -938,6 +1073,18 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
                       </div>
                     </button>
                   )}
+                  {matches('Gizlilik ve Güvenlik') && (
+                    <button
+                      onClick={() => setSubPage('privacy')}
+                      className="w-full flex items-center justify-between px-4 py-3.5 hover:bg-[var(--bg-hover)] transition-colors cursor-pointer"
+                    >
+                      <div className="flex items-center gap-3 text-sm text-white">
+                        <Shield className="w-4 h-4 text-[#23A55A]" />
+                        <span>Gizlilik &amp; Güvenlik</span>
+                      </div>
+                      <ChevronRight className="w-4 h-4 text-[var(--text-muted)]" />
+                    </button>
+                  )}
                   {matches('Bağlantılar') && (
                     <button
                       onClick={() => setSubPage('connections')}
@@ -956,9 +1103,31 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
                 </div>
               </div>
 
+              {/* Turcord Resmi Bot & Destek */}
+              <div className="space-y-1.5">
+                <p className="px-1 text-xs font-medium text-[var(--text-muted)]">Turcord Bot &amp; Destek</p>
+                <div className="rounded-2xl bg-[var(--bg-card)] border border-[var(--border-subtle)] divide-y divide-[var(--border-subtle)] overflow-hidden">
+                  {matches('Turcord Resmi Bot Uyarı Yapay Zeka Destek') && (
+                    <button
+                      onClick={() => setSubPage('bot')}
+                      className="w-full flex items-center justify-between px-4 py-3.5 hover:bg-[var(--bg-hover)] transition-colors cursor-pointer"
+                    >
+                      <div className="flex items-center gap-3 text-sm text-white">
+                        <Bot className="w-4 h-4 text-[#5865F2]" />
+                        <span>Turcord Resmi Botu</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <VerifiedBotBadge />
+                        <ChevronRight className="w-4 h-4 text-[var(--text-muted)]" />
+                      </div>
+                    </button>
+                  )}
+                </div>
+              </div>
+
               {/* Topluluk & Mağaza */}
               <div className="space-y-1.5">
-                <p className="px-1 text-xs font-medium text-[var(--text-muted)]">Ödüller &amp; Özelleştirme</p>
+                <p className="px-1 text-xs font-medium text-[var(--text-muted)]">Faturalandırma &amp; Özelleştirme</p>
                 <div className="rounded-2xl bg-[var(--bg-card)] border border-[var(--border-subtle)] divide-y divide-[var(--border-subtle)] overflow-hidden">
                   {matches('Mağaza') && (
                     <button
@@ -1001,7 +1170,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
               <div className="space-y-1.5">
                 <p className="px-1 text-xs font-medium text-[var(--text-muted)]">Uygulama Ayarları</p>
                 <div className="rounded-2xl bg-[var(--bg-card)] border border-[var(--border-subtle)] divide-y divide-[var(--border-subtle)] overflow-hidden">
-                  {matches('Ses ve Görüntü') && (
+                  {matches('Ses ve Görüntü Mikrofon Gürültü Engelleme') && (
                     <button
                       onClick={() => setSubPage('voice')}
                       className="w-full flex items-center justify-between px-4 py-3.5 hover:bg-[var(--bg-hover)] transition-colors cursor-pointer"
@@ -1016,7 +1185,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
                       </div>
                     </button>
                   )}
-                  {matches('Görünüm Oniks Koyu Gece') && (
+                  {matches('Görünüm Oniks Koyu Gece Kompakt') && (
                     <button
                       onClick={() => setSubPage('appearance')}
                       className="w-full flex items-center justify-between px-4 py-3.5 hover:bg-[var(--bg-hover)] transition-colors cursor-pointer"
@@ -1049,7 +1218,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
                     >
                       <div className="flex items-center gap-3 text-sm text-white">
                         <MessageSquare className="w-4 h-4 text-[var(--text-secondary)]" />
-                        <span>Yazıyor Göstergesi &amp; Sohbet</span>
+                        <span>Sohbet &amp; Yazıyor Göstergesi</span>
                       </div>
                       <div className="flex items-center gap-2">
                         <span className="px-1.5 py-0.5 rounded bg-[#A855F7] text-[10px] font-bold text-white">
@@ -1061,15 +1230,24 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
                   )}
                   {matches('Bildirimler') && (
                     <button
-                      onClick={() => {
-                        onClose();
-                        onOpenNotifications();
-                      }}
+                      onClick={() => setSubPage('notifications')}
                       className="w-full flex items-center justify-between px-4 py-3.5 hover:bg-[var(--bg-hover)] transition-colors cursor-pointer"
                     >
                       <div className="flex items-center gap-3 text-sm text-white">
                         <Bell className="w-4 h-4 text-[var(--text-secondary)]" />
                         <span>Bildirimler</span>
+                      </div>
+                      <ChevronRight className="w-4 h-4 text-[var(--text-muted)]" />
+                    </button>
+                  )}
+                  {matches('Gelişmiş Sistem Tanısı Sürüm') && (
+                    <button
+                      onClick={() => setSubPage('advanced')}
+                      className="w-full flex items-center justify-between px-4 py-3.5 hover:bg-[var(--bg-hover)] transition-colors cursor-pointer"
+                    >
+                      <div className="flex items-center gap-3 text-sm text-white">
+                        <Cpu className="w-4 h-4 text-[var(--text-secondary)]" />
+                        <span>Gelişmiş</span>
                       </div>
                       <ChevronRight className="w-4 h-4 text-[var(--text-muted)]" />
                     </button>
@@ -1089,9 +1267,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
               <div className="px-2 flex items-center justify-between text-xs text-[var(--text-muted)]">
                 <span className="flex items-center gap-1.5">
                   <Info className="w-3.5 h-3.5" />
-                  Halka Platformu
+                  Turcord Platformu
                 </span>
-                <span>Web Sürümü</span>
+                <span>Web v2.4</span>
               </div>
             </>
           )}
@@ -1295,8 +1473,111 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
             </div>
           )}
 
-          {subPage === 'appearance' && (
+          {subPage === 'privacy' && (
             <div className="space-y-3">
+              <div className="p-4 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-subtle)] space-y-3">
+                <div className="flex items-center gap-2 text-sm font-semibold text-white">
+                  <Shield className="w-4 h-4 text-[#23A55A]" />
+                  <span>Oturum ve Güvenlik</span>
+                </div>
+                <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
+                  Turcord hesabın Google doğrulaması ve Firestore güvenlik kuralları ile korunur. Sunucu mesajları ve DM&apos;ler yalnızca yetkili katılımcılara açıktır.
+                </p>
+                <div className="p-3 rounded-xl bg-[var(--bg-surface)] border border-[var(--border-subtle)] flex items-center justify-between text-xs">
+                  <span className="text-[var(--text-muted)]">Doğrulanmış Kimlik</span>
+                  <span className="text-[#23A55A] font-medium">Aktif</span>
+                </div>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-subtle)] space-y-4">
+                <label className="flex items-center justify-between cursor-pointer">
+                  <div>
+                    <p className="text-sm font-medium text-white">Turcord Bot Güvenlik &amp; Hata Uyarıları</p>
+                    <p className="text-xs text-[var(--text-muted)]">
+                      Bağlantı veya ses izin sorunlarında resmi bottan anlık mesaj al
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={botAlerts}
+                    onChange={(e) => updateUserPreferences(profile.uid, { botAlerts: e.target.checked })}
+                    className="w-4 h-4 accent-[#5865F2]"
+                  />
+                </label>
+              </div>
+            </div>
+          )}
+
+          {subPage === 'bot' && (
+            <div className="space-y-4">
+              <div className="p-4 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-subtle)] space-y-3">
+                <div className="flex items-center gap-3">
+                  <Avatar name="Turcord" size="lg" status="online" showStatus ringBg="var(--bg-card)" botId="turcord_bot" />
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h3 className="font-display text-base font-bold text-white">Turcord</h3>
+                      <VerifiedBotBadge label="ONAYLI UYGULAMA" />
+                    </div>
+                    <p className="text-xs text-[var(--text-muted)] mt-0.5">
+                      Resmi platform destek ve yapay zeka asistan botu
+                    </p>
+                  </div>
+                </div>
+                <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
+                  Turcord botu her türlü bağlantı, mikrofon veya kamera hatasında sana otomatik olarak DM gönderir. Ayrıca DM üzerinden veya sunucu kanallarında <code className="px-1 py-0.5 rounded bg-[var(--bg-surface)] text-white">/turcord</code> yazarak onunla sohbet edebilirsin.
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                  {onOpenBotDm && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onClose();
+                        onOpenBotDm();
+                      }}
+                      className="py-2.5 px-3 rounded-xl bg-[#5865F2] hover:bg-[#4752C4] text-white text-xs font-medium flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      <MessageSquare className="w-4 h-4" />
+                      <span>Turcord Bot ile Konuş</span>
+                    </button>
+                  )}
+                  {onRunDiagnostics && (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        await onRunDiagnostics();
+                        setDiagSent(true);
+                        setTimeout(() => setDiagSent(false), 2500);
+                      }}
+                      className="py-2.5 px-3 rounded-xl bg-[var(--bg-surface)] border border-[var(--border-subtle)] hover:border-[#5865F2] text-white text-xs font-medium flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      <Activity className="w-4 h-4 text-[#23A55A]" />
+                      <span>{diagSent ? 'Rapor DM’e Gönderildi' : 'Sistem Tanısı Gönder'}</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-subtle)]">
+                <label className="flex items-center justify-between cursor-pointer">
+                  <div>
+                    <p className="text-sm font-medium text-white">Otomatik Sorun Bildirimleri</p>
+                    <p className="text-xs text-[var(--text-muted)]">
+                      Mikrofon, kamera veya çağrı hatalarında Turcord botundan otomatik uyarı al
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={botAlerts}
+                    onChange={(e) => updateUserPreferences(profile.uid, { botAlerts: e.target.checked })}
+                    className="w-4 h-4 accent-[#5865F2]"
+                  />
+                </label>
+              </div>
+            </div>
+          )}
+
+          {subPage === 'appearance' && (
+            <div className="space-y-4">
               <p className="text-xs text-[var(--text-muted)]">
                 Uygulama temasını seç — değişiklik tüm arayüzde anında uygulanır.
               </p>
@@ -1345,11 +1626,87 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
                   </button>
                 ))}
               </div>
+
+              <div className="p-4 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-subtle)]">
+                <label className="flex items-center justify-between cursor-pointer">
+                  <div>
+                    <p className="text-sm font-medium text-white">Kompakt Mesaj Modu</p>
+                    <p className="text-xs text-[var(--text-muted)]">
+                      Kanallarda daha sıkı satır aralığı ve daha küçük avatar göster
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={compactMode}
+                    onChange={(e) => updateUserPreferences(profile.uid, { compactMode: e.target.checked })}
+                    className="w-4 h-4 accent-[#5865F2]"
+                  />
+                </label>
+              </div>
             </div>
           )}
 
           {subPage === 'voice' && (
             <div className="space-y-4">
+              <div className="p-4 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-subtle)] space-y-3">
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-semibold text-[var(--text-muted)] uppercase">
+                    Giriş Aygıtı (Mikrofon)
+                  </label>
+                  <select
+                    value={selectedMicId}
+                    onChange={(e) => setSelectedMicId(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] text-xs text-white outline-none"
+                  >
+                    {audioInputs.length === 0 ? (
+                      <option value="">Varsayılan Mikrofon</option>
+                    ) : (
+                      audioInputs.map((d, idx) => (
+                        <option key={d.deviceId || idx} value={d.deviceId}>
+                          {d.label || `Mikrofon ${idx + 1}`}
+                        </option>
+                      ))
+                    )}
+                  </select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-semibold text-[var(--text-muted)] uppercase">
+                    Çıkış Aygıtı (Hoparlör / Kulaklık)
+                  </label>
+                  <select
+                    value={selectedSpeakerId}
+                    onChange={(e) => setSelectedSpeakerId(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] text-xs text-white outline-none"
+                  >
+                    {audioOutputs.length === 0 ? (
+                      <option value="">Varsayılan Ses Çıkışı</option>
+                    ) : (
+                      audioOutputs.map((d, idx) => (
+                        <option key={d.deviceId || idx} value={d.deviceId}>
+                          {d.label || `Hoparlör ${idx + 1}`}
+                        </option>
+                      ))
+                    )}
+                  </select>
+                </div>
+
+                <label className="flex items-center justify-between pt-2 border-t border-[var(--border-subtle)] cursor-pointer">
+                  <div>
+                    <p className="text-sm font-medium text-white">Gürültü Engelleme</p>
+                    <p className="text-xs text-[var(--text-muted)]">
+                      Arka plan klavye ve ortam sesini azaltır
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={noiseSuppression}
+                    onChange={(e) => updateUserPreferences(profile.uid, { noiseSuppression: e.target.checked })}
+                    className="w-4 h-4 accent-[#5865F2]"
+                  />
+                </label>
+              </div>
+
               <div className="p-4 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-subtle)] space-y-3">
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-medium text-white flex items-center gap-2">
@@ -1412,6 +1769,98 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
                   />
                 </label>
               </div>
+            </div>
+          )}
+
+          {subPage === 'notifications' && (
+            <div className="space-y-4">
+              <div className="p-4 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-subtle)] space-y-4">
+                <label className="flex items-center justify-between cursor-pointer">
+                  <div>
+                    <p className="text-sm font-medium text-white">Yanıt ve Bahsetme Bildirimleri</p>
+                    <p className="text-xs text-[var(--text-muted)]">
+                      Kanallarda yanıt veya bahsetme aldığında bildirim kutusuna düşsün
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={mentionNotifs}
+                    onChange={(e) => updateUserPreferences(profile.uid, { mentionNotifs: e.target.checked })}
+                    className="w-4 h-4 accent-[#5865F2]"
+                  />
+                </label>
+                <label className="flex items-center justify-between cursor-pointer pt-3 border-t border-[var(--border-subtle)]">
+                  <div>
+                    <p className="text-sm font-medium text-white">Turcord Bot Sistem Bildirimleri</p>
+                    <p className="text-xs text-[var(--text-muted)]">
+                      Teknik uyarı ve sistem tanısı mesajlarını bildir
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={botAlerts}
+                    onChange={(e) => updateUserPreferences(profile.uid, { botAlerts: e.target.checked })}
+                    className="w-4 h-4 accent-[#5865F2]"
+                  />
+                </label>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onOpenNotifications();
+                }}
+                className="w-full py-2.5 rounded-xl bg-[#5865F2] hover:bg-[#4752C4] text-white text-sm font-medium cursor-pointer"
+              >
+                Bildirimler &amp; İşaretler Kutusunu Aç
+              </button>
+            </div>
+          )}
+
+          {subPage === 'advanced' && (
+            <div className="space-y-4">
+              <div className="p-4 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-subtle)] space-y-3 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-[var(--text-muted)]">Uygulama Sürümü</span>
+                  <span className="font-mono text-white">Turcord Web v2.4</span>
+                </div>
+                <div className="flex items-center justify-between pt-2 border-t border-[var(--border-subtle)]">
+                  <span className="text-[var(--text-muted)]">Gerçek Zamanlı Ses/Yazıyor Sunucusu</span>
+                  <span className={wsConnected ? 'text-[#23A55A] font-medium' : 'text-amber-400 font-medium'}>
+                    {wsConnected ? 'Bağlı' : 'Çevrimdışı / Statik Mod'}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-2 pt-2 border-t border-[var(--border-subtle)]">
+                  <span className="text-[var(--text-muted)]">Kullanıcı Kimliği (UID)</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard.writeText(profile.uid).catch(() => {});
+                      setCopiedId(true);
+                      setTimeout(() => setCopiedId(false), 1800);
+                    }}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[var(--bg-surface)] border border-[var(--border-subtle)] font-mono text-[11px] text-white cursor-pointer"
+                  >
+                    <span>{copiedId ? 'Kopyalandı' : `${profile.uid.slice(0, 10)}...`}</span>
+                    <Copy className="w-3 h-3" />
+                  </button>
+                </div>
+              </div>
+
+              {onRunDiagnostics && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await onRunDiagnostics();
+                    setDiagSent(true);
+                    setTimeout(() => setDiagSent(false), 2500);
+                  }}
+                  className="w-full py-2.5 rounded-xl bg-[var(--bg-card)] border border-[var(--border-subtle)] hover:border-[#5865F2] text-white text-xs font-medium flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <Activity className="w-4 h-4 text-[#23A55A]" />
+                  <span>{diagSent ? 'Tanı Raporu Turcord DM’e Gönderildi' : 'Tam Sistem Tanısı Çalıştır'}</span>
+                </button>
+              )}
             </div>
           )}
         </div>
