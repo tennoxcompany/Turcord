@@ -384,15 +384,26 @@ export function useRealtimeSocket(profile: PublicProfile | null, activeServerId:
   // WebSocket lifecycle
   useEffect(() => {
     if (!profile) return;
+    const configuredWsUrl = (import.meta.env.VITE_WS_URL as string | undefined)?.trim();
+    const isStaticGithubPages = window.location.hostname.endsWith('.github.io');
+    if (isStaticGithubPages && !configuredWsUrl) {
+      return;
+    }
+
     let unmounted = false;
+    let failedAttempts = 0;
+    let openedOnce = false;
 
     const connect = () => {
       if (unmounted) return;
       const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const ws = new WebSocket(`${proto}//${window.location.host}/ws`);
+      const wsUrl = configuredWsUrl || `${proto}//${window.location.host}/ws`;
+      const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
       ws.onopen = () => {
+        openedOnce = true;
+        failedAttempts = 0;
         setWsConnected(true);
         const p = profileRef.current;
         if (p) {
@@ -514,7 +525,8 @@ export function useRealtimeSocket(profile: PublicProfile | null, activeServerId:
 
       ws.onclose = () => {
         setWsConnected(false);
-        if (!unmounted) {
+        failedAttempts += 1;
+        if (!unmounted && (openedOnce || failedAttempts < 3)) {
           reconnectTimerRef.current = window.setTimeout(connect, 2500);
         }
       };

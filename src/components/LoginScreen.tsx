@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Headphones, MessageSquare, ShieldCheck, Users } from 'lucide-react';
+import loginShowcaseImg from '../assets/images/halka_login_showcase_1795430680974.jpg';
 
 interface LoginScreenProps {
   onGoogleLogin: () => Promise<void>;
@@ -109,7 +110,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onGoogleLogin, error }
       {/* Right Column: Visual Showcase */}
       <div className="hidden lg:block flex-1 relative overflow-hidden bg-[#18191C] border-l border-[#2B2D31]">
         <img
-          src="/src/assets/images/halka_login_showcase_1795430680974.jpg"
+          src={loginShowcaseImg}
           alt="Halka sesli ve topluluk iletişim halkaları"
           referrerPolicy="no-referrer"
           className="w-full h-full object-cover opacity-90"
