@@ -1,0 +1,102 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  :root,
+  [data-theme="oniks"] {
+    --font-display: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    --font-sans: 'DM Sans', system-ui, -apple-system, sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+
+    --bg-rail: #070709;
+    --bg-sidebar: #0F1014;
+    --bg-surface: #09090C;
+    --bg-card: #15161B;
+    --bg-elevated: #1E2027;
+    --bg-input: #181920;
+    --bg-hover: #1C1E25;
+    --border-subtle: #22242C;
+    --text-primary: #F2F3F5;
+    --text-secondary: #B5BAC1;
+    --text-muted: #80848E;
+    --accent: #5865F2;
+  }
+
+  [data-theme="koyu"] {
+    --bg-rail: #1E1F22;
+    --bg-sidebar: #2B2D31;
+    --bg-surface: #313338;
+    --bg-card: #2B2D31;
+    --bg-elevated: #383A40;
+    --bg-input: #383A40;
+    --bg-hover: #35373C;
+    --border-subtle: #1E1F22;
+    --text-primary: #F2F3F5;
+    --text-secondary: #DBDEE1;
+    --text-muted: #949BA4;
+    --accent: #5865F2;
+  }
+
+  [data-theme="gece"] {
+    --bg-rail: #0B0E14;
+    --bg-sidebar: #131722;
+    --bg-surface: #0F131C;
+    --bg-card: #191F2D;
+    --bg-elevated: #22293A;
+    --bg-input: #1B2130;
+    --bg-hover: #1E2535;
+    --border-subtle: #252C3E;
+    --text-primary: #F2F4F8;
+    --text-secondary: #BAC2D0;
+    --text-muted: #7F899D;
+    --accent: #5865F2;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    background-color: var(--bg-surface);
+    color: var(--text-primary);
+    overflow: hidden;
+  }
+
+  h1, h2, h3, h4, .font-display {
+    font-family: var(--font-display);
+  }
+
+  code, pre, .font-mono, .tabular-nums {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* Avatar Decoration Rings */
+.deco-cyber-ring {
+  box-shadow: 0 0 0 2.5px #38BDF8, 0 0 12px rgba(56, 189, 248, 0.45);
+}
+.deco-emerald-flame {
+  box-shadow: 0 0 0 2.5px #23A55A, 0 0 12px rgba(35, 165, 90, 0.45);
+}
+.deco-crimson-pulse {
+  box-shadow: 0 0 0 2.5px #F23F43, 0 0 12px rgba(242, 63, 67, 0.45);
+}
+.deco-gold-halo {
+  box-shadow: 0 0 0 2.5px #F59E0B, 0 0 14px rgba(245, 158, 11, 0.5);
+}
+.deco-aurora-orbit {
+  box-shadow: 0 0 0 2.5px #A855F7, 0 0 14px rgba(168, 85, 247, 0.5);
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-subtle);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--bg-elevated);
+}

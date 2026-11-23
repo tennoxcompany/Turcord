@@ -1,0 +1,6 @@
+{
+  "name": "Halka",
+  "description": "Türkiye'den ve dünyadan topluluklar için gerçek zamanlı sesli, görüntülü ve yazılı sohbet platformu.",
+  "requestFramePermissions": ["microphone", "camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
