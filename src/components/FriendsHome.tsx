@@ -20,12 +20,14 @@ import {
 } from 'lucide-react';
 import type {
   ChatMessage,
+  ChatPoll,
   DmThreadDoc,
   FriendRequestDoc,
   PublicProfile,
   UserStatus,
   VoiceParticipant,
 } from '../types/halka';
+import { ACTIVITY_LABELS } from '../lib/cosmetics';
 import { isOfficialBotUid } from '../lib/turcordBots';
 import { Avatar, ClanTagBadge, VerifiedBotBadge } from './Avatar';
 import { ChatArea } from './ChatArea';
@@ -74,10 +76,12 @@ interface FriendsHomeProps {
     attachmentUrl?: string;
     attachmentName?: string;
     replyTo?: ChatMessage | null;
+    poll?: ChatPoll;
   }) => Promise<void>;
   onEditDmMessage: (msgId: string, newContent: string) => Promise<void>;
   onDeleteDmMessage: (msgId: string) => Promise<void>;
   onToggleDmReaction: (msg: ChatMessage, emoji: string) => Promise<void>;
+  onVoteDmPoll?: (msg: ChatMessage, optionIndex: number) => Promise<void>;
   onBookmarkMessage: (msg: ChatMessage, channelLabel: string) => Promise<void>;
   onTyping: (channelKey: string, isTyping: boolean) => void;
   onStartDmCall: (otherUid: string, otherName: string, threadId: string, video: boolean) => void;
@@ -123,6 +127,7 @@ export const FriendsHome: React.FC<FriendsHomeProps> = ({
   onEditDmMessage,
   onDeleteDmMessage,
   onToggleDmReaction,
+  onVoteDmPoll,
   onBookmarkMessage,
   onTyping,
   onStartDmCall,
@@ -463,7 +468,11 @@ export const FriendsHome: React.FC<FriendsHomeProps> = ({
                 <ClanTagBadge tag={profile.clanTag} />
               </div>
               <p className="text-[11px] text-[var(--text-muted)] truncate leading-tight">
-                {profile.customStatus || `@${profile.username}`}
+                {profile.statusEmoji ? `${profile.statusEmoji} ` : ''}
+                {profile.customStatus ||
+                  (profile.activity?.name
+                    ? `${ACTIVITY_LABELS[profile.activity.type]}: ${profile.activity.name}`
+                    : `@${profile.username}`)}
               </p>
             </div>
           </button>
@@ -551,6 +560,7 @@ export const FriendsHome: React.FC<FriendsHomeProps> = ({
             channelKey={`dm:${activeThread.id}`}
             messages={dmMessages}
             currentUid={profile.uid}
+            currentUserDecoration={profile.avatarDecoration}
             canModerate={Boolean(activeThread.isBotThread)}
             canPin={false}
             compactMode={Boolean(profile.compactMode)}
@@ -566,6 +576,7 @@ export const FriendsHome: React.FC<FriendsHomeProps> = ({
             onEditMessage={onEditDmMessage}
             onDeleteMessage={onDeleteDmMessage}
             onToggleReaction={onToggleDmReaction}
+            onVotePoll={onVoteDmPoll}
             onBookmark={(msg) => onBookmarkMessage(msg, activeThreadTitle)}
             onAuthorClick={(uid) => onOpenProfile(uid)}
             onStartDmCall={

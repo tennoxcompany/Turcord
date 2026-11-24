@@ -24,6 +24,22 @@ service cloud.firestore {
     function isValidUsername(u) {
       return u is string && u.size() >= 2 && u.size() <= 32 && u.matches('^[a-z0-9_\\.]+$');
     }
+    function isSafeMediaStr(s, maxLen) {
+      return s is string && s.size() <= maxLen && (
+        s == '' ||
+        s.matches('^https://.*') ||
+        s.matches('^preset:[a-z0-9_\\-]+$') ||
+        s.matches('^data:image/(png|jpeg|jpg|webp|gif);base64,.*')
+      );
+    }
+    function isValidPoll(poll) {
+      return poll is map
+        && poll.keys().hasAll(['question', 'options'])
+        && poll.keys().hasOnly(['question', 'options', 'multiSelect'])
+        && poll.question is string && poll.question.size() >= 1 && poll.question.size() <= 200
+        && poll.options is list && poll.options.size() >= 2 && poll.options.size() <= 6
+        && (!('multiSelect' in poll) || poll.multiSelect is bool);
+    }
 
     // --- Server Membership & Role Helpers ---
     function serverExists(serverId) {
@@ -54,17 +70,26 @@ service cloud.firestore {
     // --- Entity Validation Blueprints ---
     function isValidPublicProfile(data, uid) {
       return data.keys().hasAll(['uid', 'username', 'displayName', 'avatarUrl', 'bannerColor', 'bio', 'status', 'customStatus', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['uid', 'username', 'displayName', 'avatarUrl', 'bannerColor', 'bio', 'status', 'customStatus', 'clanTag', 'avatarDecoration', 'orbsBalance', 'connections', 'theme', 'showTypingIndicator', 'mentionNotifs', 'botAlerts', 'compactMode', 'noiseSuppression', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'username', 'displayName', 'avatarUrl', 'bannerColor', 'bannerUrl', 'bio', 'pronouns', 'status', 'statusEmoji', 'customStatus', 'clanTag', 'avatarDecoration', 'profileEffect', 'nameplate', 'activity', 'badges', 'unlockedCosmetics', 'claimedQuests', 'orbsBalance', 'connections', 'theme', 'showTypingIndicator', 'mentionNotifs', 'botAlerts', 'compactMode', 'noiseSuppression', 'createdAt', 'updatedAt'])
         && data.uid == uid
         && isValidUsername(data.username)
         && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 40
-        && data.avatarUrl is string && data.avatarUrl.size() <= 1000
-        && data.bannerColor is string && data.bannerColor.size() <= 20
+        && isSafeMediaStr(data.avatarUrl, 12000)
+        && data.bannerColor is string && data.bannerColor.size() <= 40
+        && (!('bannerUrl' in data) || isSafeMediaStr(data.bannerUrl, 12000))
         && data.bio is string && data.bio.size() <= 300
+        && (!('pronouns' in data) || (data.pronouns is string && data.pronouns.size() <= 30))
         && data.status in ['online', 'idle', 'dnd', 'offline']
+        && (!('statusEmoji' in data) || (data.statusEmoji is string && data.statusEmoji.size() <= 16))
         && data.customStatus is string && data.customStatus.size() <= 100
         && (!('clanTag' in data) || (data.clanTag is string && data.clanTag.size() <= 8))
         && (!('avatarDecoration' in data) || (data.avatarDecoration is string && data.avatarDecoration.size() <= 40))
+        && (!('profileEffect' in data) || (data.profileEffect is string && data.profileEffect.size() <= 40))
+        && (!('nameplate' in data) || (data.nameplate is string && data.nameplate.size() <= 40))
+        && (!('activity' in data) || (data.activity is map && data.activity.size() <= 4))
+        && (!('badges' in data) || (data.badges is list && data.badges.size() <= 12))
+        && (!('unlockedCosmetics' in data) || (data.unlockedCosmetics is list && data.unlockedCosmetics.size() <= 60))
+        && (!('claimedQuests' in data) || (data.claimedQuests is list && data.claimedQuests.size() <= 30))
         && (!('orbsBalance' in data) || (data.orbsBalance is int && data.orbsBalance >= 0 && data.orbsBalance <= 1000000))
         && (!('connections' in data) || (data.connections is list && data.connections.size() <= 6))
         && (!('theme' in data) || (data.theme in ['oniks', 'koyu', 'gece']))
@@ -111,7 +136,7 @@ service cloud.firestore {
         && data.type in ['mention', 'reply', 'system']
         && data.fromUid is string && data.fromUid.size() >= 1 && data.fromUid.size() <= 128
         && data.fromName is string && data.fromName.size() >= 1 && data.fromName.size() <= 40
-        && data.fromAvatar is string && data.fromAvatar.size() <= 1000
+        && isSafeMediaStr(data.fromAvatar, 12000)
         && data.channelLabel is string && data.channelLabel.size() <= 80
         && data.preview is string && data.preview.size() <= 300
         && data.isRead is bool
@@ -124,7 +149,7 @@ service cloud.firestore {
         && data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128
         && isValidUsername(data.username) && data.username == uname
         && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 40
-        && data.avatarUrl is string && data.avatarUrl.size() <= 1000
+        && isSafeMediaStr(data.avatarUrl, 12000)
         && data.updatedAt is timestamp;
     }
 
@@ -142,12 +167,14 @@ service cloud.firestore {
 
     function isValidServer(data, serverId) {
       return data.keys().hasAll(['id', 'name', 'description', 'iconEmoji', 'iconColor', 'ownerId', 'isPublic', 'inviteCode', 'memberCount', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['id', 'name', 'description', 'iconEmoji', 'iconColor', 'ownerId', 'isPublic', 'inviteCode', 'memberCount', 'enabledBots', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'name', 'description', 'iconEmoji', 'iconColor', 'bannerColor', 'boostCount', 'ownerId', 'isPublic', 'inviteCode', 'memberCount', 'enabledBots', 'createdAt', 'updatedAt'])
         && data.id == serverId && isValidId(data.id)
         && data.name is string && data.name.size() >= 1 && data.name.size() <= 60
         && data.description is string && data.description.size() <= 300
         && data.iconEmoji is string && data.iconEmoji.size() <= 16
         && data.iconColor is string && data.iconColor.size() <= 20
+        && (!('bannerColor' in data) || (data.bannerColor is string && data.bannerColor.size() <= 40))
+        && (!('boostCount' in data) || (data.boostCount is int && data.boostCount >= 0 && data.boostCount <= 100000))
         && data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128
         && data.isPublic is bool
         && data.inviteCode is string && data.inviteCode.size() >= 4 && data.inviteCode.size() <= 24 && data.inviteCode.matches('^[a-zA-Z0-9_\\-]+$')
@@ -172,14 +199,18 @@ service cloud.firestore {
 
     function isValidServerMember(data, serverId, memberId) {
       return data.keys().hasAll(['uid', 'serverId', 'displayName', 'username', 'avatarUrl', 'role', 'roleColor', 'joinedAt', 'updatedAt'])
-        && data.keys().hasOnly(['uid', 'serverId', 'displayName', 'username', 'avatarUrl', 'role', 'roleColor', 'inviteCode', 'joinedAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'serverId', 'displayName', 'username', 'avatarUrl', 'role', 'roleColor', 'avatarDecoration', 'clanTag', 'nameplate', 'activityText', 'inviteCode', 'joinedAt', 'updatedAt'])
         && data.uid == memberId && isValidId(data.uid)
         && data.serverId == serverId && isValidId(data.serverId)
         && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 40
         && data.username is string && data.username.size() >= 2 && data.username.size() <= 32
-        && data.avatarUrl is string && data.avatarUrl.size() <= 1000
+        && isSafeMediaStr(data.avatarUrl, 12000)
         && data.role in ['owner', 'admin', 'moderator', 'member']
         && data.roleColor is string && data.roleColor.size() <= 20
+        && (!('avatarDecoration' in data) || (data.avatarDecoration is string && data.avatarDecoration.size() <= 40))
+        && (!('clanTag' in data) || (data.clanTag is string && data.clanTag.size() <= 8))
+        && (!('nameplate' in data) || (data.nameplate is string && data.nameplate.size() <= 40))
+        && (!('activityText' in data) || (data.activityText is string && data.activityText.size() <= 80))
         && (!('inviteCode' in data) || (data.inviteCode is string && data.inviteCode.size() <= 24))
         && data.joinedAt is timestamp
         && data.updatedAt is timestamp;
@@ -187,7 +218,7 @@ service cloud.firestore {
 
     function isValidChannel(data, serverId, channelId) {
       return data.keys().hasAll(['id', 'serverId', 'name', 'type', 'category', 'topic', 'position', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['id', 'serverId', 'name', 'type', 'category', 'topic', 'position', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'serverId', 'name', 'type', 'category', 'topic', 'position', 'slowmodeSeconds', 'nsfw', 'createdAt', 'updatedAt'])
         && data.id == channelId && isValidId(data.id)
         && data.serverId == serverId && isValidId(data.serverId)
         && data.name is string && data.name.size() >= 1 && data.name.size() <= 50
@@ -195,6 +226,8 @@ service cloud.firestore {
         && data.category is string && data.category.size() >= 1 && data.category.size() <= 40
         && data.topic is string && data.topic.size() <= 200
         && data.position is int && data.position >= 0 && data.position <= 500
+        && (!('slowmodeSeconds' in data) || (data.slowmodeSeconds is int && data.slowmodeSeconds >= 0 && data.slowmodeSeconds <= 300))
+        && (!('nsfw' in data) || (data.nsfw is bool))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -214,12 +247,12 @@ service cloud.firestore {
 
     function isValidChannelMessage(data, serverId, channelId, messageId) {
       return data.keys().hasAll(['id', 'serverId', 'channelId', 'authorId', 'authorName', 'authorAvatar', 'authorRoleColor', 'content', 'attachmentUrl', 'attachmentName', 'replyToId', 'replyToAuthor', 'replyToContent', 'reactions', 'pinned', 'edited', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['id', 'serverId', 'channelId', 'authorId', 'authorName', 'authorAvatar', 'authorRoleColor', 'content', 'attachmentUrl', 'attachmentName', 'replyToId', 'replyToAuthor', 'replyToContent', 'reactions', 'pinned', 'edited', 'isBot', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'serverId', 'channelId', 'authorId', 'authorName', 'authorAvatar', 'authorRoleColor', 'content', 'attachmentUrl', 'attachmentName', 'replyToId', 'replyToAuthor', 'replyToContent', 'reactions', 'poll', 'pinned', 'edited', 'isBot', 'createdAt', 'updatedAt'])
         && data.id == messageId && isValidId(data.id)
         && data.serverId == serverId && data.channelId == channelId
         && data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128
         && data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 40
-        && data.authorAvatar is string && data.authorAvatar.size() <= 1000
+        && isSafeMediaStr(data.authorAvatar, 12000)
         && data.authorRoleColor is string && data.authorRoleColor.size() <= 20
         && data.content is string && data.content.size() <= 2000
         && data.attachmentUrl is string && data.attachmentUrl.size() <= 300000
@@ -229,6 +262,7 @@ service cloud.firestore {
         && data.replyToAuthor is string && data.replyToAuthor.size() <= 40
         && data.replyToContent is string && data.replyToContent.size() <= 200
         && data.reactions is map && data.reactions.size() <= 30
+        && (!('poll' in data) || isValidPoll(data.poll))
         && data.pinned is bool
         && data.edited is bool
         && (!('isBot' in data) || (data.isBot is bool))
@@ -243,11 +277,11 @@ service cloud.firestore {
         && data.fromUid is string && data.fromUid.size() >= 1 && data.fromUid.size() <= 128
         && data.fromName is string && data.fromName.size() >= 1 && data.fromName.size() <= 40
         && data.fromUsername is string && data.fromUsername.size() >= 2 && data.fromUsername.size() <= 32
-        && data.fromAvatar is string && data.fromAvatar.size() <= 1000
+        && isSafeMediaStr(data.fromAvatar, 12000)
         && data.toUid is string && data.toUid.size() >= 1 && data.toUid.size() <= 128
         && data.toName is string && data.toName.size() >= 1 && data.toName.size() <= 40
         && data.toUsername is string && data.toUsername.size() >= 2 && data.toUsername.size() <= 32
-        && data.toAvatar is string && data.toAvatar.size() <= 1000
+        && isSafeMediaStr(data.toAvatar, 12000)
         && data.participants is list && data.participants.size() == 2
         && data.fromUid in data.participants && data.toUid in data.participants
         && data.status in ['pending', 'accepted']
@@ -273,12 +307,12 @@ service cloud.firestore {
 
     function isValidDmMessage(data, threadId, messageId) {
       return data.keys().hasAll(['id', 'threadId', 'authorId', 'authorName', 'authorAvatar', 'content', 'attachmentUrl', 'attachmentName', 'replyToId', 'replyToAuthor', 'replyToContent', 'reactions', 'edited', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['id', 'threadId', 'authorId', 'authorName', 'authorAvatar', 'content', 'attachmentUrl', 'attachmentName', 'replyToId', 'replyToAuthor', 'replyToContent', 'reactions', 'edited', 'isBot', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'threadId', 'authorId', 'authorName', 'authorAvatar', 'content', 'attachmentUrl', 'attachmentName', 'replyToId', 'replyToAuthor', 'replyToContent', 'reactions', 'poll', 'edited', 'isBot', 'createdAt', 'updatedAt'])
         && data.id == messageId && isValidId(data.id)
         && data.threadId == threadId
         && data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128
         && data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 40
-        && data.authorAvatar is string && data.authorAvatar.size() <= 1000
+        && isSafeMediaStr(data.authorAvatar, 12000)
         && data.content is string && data.content.size() <= 2000
         && data.attachmentUrl is string && data.attachmentUrl.size() <= 300000
         && data.attachmentName is string && data.attachmentName.size() <= 120
@@ -287,6 +321,7 @@ service cloud.firestore {
         && data.replyToAuthor is string && data.replyToAuthor.size() <= 40
         && data.replyToContent is string && data.replyToContent.size() <= 200
         && data.reactions is map && data.reactions.size() <= 30
+        && (!('poll' in data) || isValidPoll(data.poll))
         && data.edited is bool
         && (!('isBot' in data) || (data.isBot is bool))
         && data.createdAt is timestamp
@@ -298,7 +333,7 @@ service cloud.firestore {
         && data.keys().hasOnly(['uid', 'displayName', 'avatarUrl', 'status', 'lastSeenAt'])
         && data.uid == uid
         && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 40
-        && data.avatarUrl is string && data.avatarUrl.size() <= 1000
+        && isSafeMediaStr(data.avatarUrl, 12000)
         && data.status in ['online', 'idle', 'dnd', 'offline']
         && data.lastSeenAt is timestamp;
     }
@@ -311,7 +346,7 @@ service cloud.firestore {
         && data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128
         && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 40
         && data.username is string && data.username.size() >= 2 && data.username.size() <= 32
-        && data.avatarUrl is string && data.avatarUrl.size() <= 1000
+        && isSafeMediaStr(data.avatarUrl, 12000)
         && data.muted is bool
         && data.deafened is bool
         && data.cameraOn is bool
@@ -338,7 +373,7 @@ service cloud.firestore {
         && data.id == callId && isValidId(data.id)
         && data.fromUid is string && data.fromUid.size() >= 1 && data.fromUid.size() <= 128
         && data.fromName is string && data.fromName.size() >= 1 && data.fromName.size() <= 40
-        && data.fromAvatar is string && data.fromAvatar.size() <= 1000
+        && isSafeMediaStr(data.fromAvatar, 12000)
         && data.roomKey is string && data.roomKey.size() >= 1 && data.roomKey.size() <= 160
         && data.video is bool
         && data.status in ['ringing', 'declined']
@@ -357,7 +392,7 @@ service cloud.firestore {
         && incoming().uid == existing().uid
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
-        && incoming().diff(existing()).affectedKeys().hasOnly(['username', 'displayName', 'avatarUrl', 'bannerColor', 'bio', 'status', 'customStatus', 'clanTag', 'avatarDecoration', 'orbsBalance', 'connections', 'theme', 'showTypingIndicator', 'mentionNotifs', 'botAlerts', 'compactMode', 'noiseSuppression', 'updatedAt']);
+        && incoming().diff(existing()).affectedKeys().hasOnly(['username', 'displayName', 'avatarUrl', 'bannerColor', 'bannerUrl', 'bio', 'pronouns', 'status', 'statusEmoji', 'customStatus', 'clanTag', 'avatarDecoration', 'profileEffect', 'nameplate', 'activity', 'badges', 'unlockedCosmetics', 'claimedQuests', 'orbsBalance', 'connections', 'theme', 'showTypingIndicator', 'mentionNotifs', 'botAlerts', 'compactMode', 'noiseSuppression', 'updatedAt']);
       allow delete: if false;
 
       match /private/{docId} {
@@ -462,7 +497,13 @@ service cloud.firestore {
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
         && (
-          (isServerAdmin(serverId) && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'description', 'iconEmoji', 'iconColor', 'isPublic', 'inviteCode', 'memberCount', 'enabledBots', 'updatedAt'])) ||
+          (isServerAdmin(serverId) && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'description', 'iconEmoji', 'iconColor', 'bannerColor', 'isPublic', 'inviteCode', 'memberCount', 'enabledBots', 'updatedAt'])) ||
+          (isServerMember(serverId) && incoming().diff(existing()).affectedKeys().hasOnly(['boostCount', 'updatedAt'])
+            && incoming().boostCount is int
+            && (
+              (!('boostCount' in existing()) && incoming().boostCount == 1) ||
+              (('boostCount' in existing()) && incoming().boostCount == existing().boostCount + 1)
+            )) ||
           (isSignedIn() && incoming().diff(existing()).affectedKeys().hasOnly(['memberCount', 'updatedAt'])
             && (
               (incoming().memberCount == existing().memberCount + 1 && existsAfter(/databases/$(database)/documents/servers/$(serverId)/members/$(request.auth.uid))) ||
@@ -495,7 +536,7 @@ service cloud.firestore {
           && incoming().joinedAt == existing().joinedAt
           && incoming().updatedAt == request.time
           && (
-            (memberId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'username', 'avatarUrl', 'updatedAt'])) ||
+            (memberId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'username', 'avatarUrl', 'avatarDecoration', 'clanTag', 'nameplate', 'activityText', 'updatedAt'])) ||
             (isServerAdmin(serverId) && existing().role != 'owner' && incoming().role != 'owner' && incoming().diff(existing()).affectedKeys().hasOnly(['role', 'roleColor', 'updatedAt']))
           );
         allow delete: if isValidId(serverId) && isValidId(memberId) && (
@@ -516,7 +557,7 @@ service cloud.firestore {
           && incoming().serverId == existing().serverId
           && incoming().createdAt == existing().createdAt
           && incoming().updatedAt == request.time
-          && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'type', 'category', 'topic', 'position', 'updatedAt']);
+          && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'type', 'category', 'topic', 'position', 'slowmodeSeconds', 'nsfw', 'updatedAt']);
         allow delete: if isValidId(serverId) && isValidId(channelId) && isServerMod(serverId);
 
         match /messages/{messageId} {

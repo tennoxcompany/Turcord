@@ -6,12 +6,15 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  Clock,
   Compass,
   Copy,
   Cpu,
+  Gamepad2,
   Gem,
   Globe,
   Hash,
+  Image as ImageIcon,
   Info,
   Link2,
   Lock,
@@ -31,22 +34,34 @@ import {
   Users,
   Volume2,
   X,
+  Zap,
 } from 'lucide-react';
 import type {
+  ActivityType,
   AppearanceTheme,
   BotId,
+  ChannelDoc,
   ChannelType,
   MemberRole,
   PublicProfile,
   ServerDoc,
   ServerEmoji,
   ServerMember,
+  UserActivity,
   UserConnection,
   UserStatus,
 } from '../types/halka';
 import { fetchPublicServers, ROLE_LABELS, updateUserPreferences } from '../lib/halkaService';
+import {
+  ACTIVITY_PRESETS,
+  ANIMATED_AVATAR_PRESETS,
+  ANIMATED_BANNERS,
+  isSafeMediaUrl,
+  SOLID_BANNER_COLORS,
+} from '../lib/cosmetics';
 import { OFFICIAL_BOTS } from '../lib/turcordBots';
 import { Avatar, VerifiedBotBadge } from './Avatar';
+import { ProfileBanner } from './ProfileEffects';
 
 const SERVER_COLORS = ['#5865F2', '#248046', '#DA373C', '#9B59B6', '#E67E22', '#0EA5E9'];
 const SERVER_EMOJIS = ['⚡', '🎮', '💻', '🎧', '🚀', '☕', '🛡️', '🇹🇷'];
@@ -411,7 +426,14 @@ export const InviteModal: React.FC<{ server: ServerDoc; onClose: () => void }> =
 interface CreateChannelModalProps {
   defaultType: ChannelType;
   onClose: () => void;
-  onCreate: (input: { name: string; type: ChannelType; category: string; topic: string }) => Promise<void>;
+  onCreate: (input: {
+    name: string;
+    type: ChannelType;
+    category: string;
+    topic: string;
+    slowmodeSeconds?: number;
+    nsfw?: boolean;
+  }) => Promise<void>;
 }
 
 export const CreateChannelModal: React.FC<CreateChannelModalProps> = ({
@@ -425,6 +447,8 @@ export const CreateChannelModal: React.FC<CreateChannelModalProps> = ({
     defaultType === 'voice' ? 'SESLİ KANALLAR' : 'METİN KANALLARI'
   );
   const [topic, setTopic] = useState('');
+  const [slowmodeSeconds, setSlowmodeSeconds] = useState(0);
+  const [nsfw, setNsfw] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -432,7 +456,7 @@ export const CreateChannelModal: React.FC<CreateChannelModalProps> = ({
     if (!name.trim() || loading) return;
     setLoading(true);
     try {
-      await onCreate({ name, type, category, topic });
+      await onCreate({ name, type, category, topic, slowmodeSeconds, nsfw });
       onClose();
     } finally {
       setLoading(false);
@@ -446,8 +470,8 @@ export const CreateChannelModal: React.FC<CreateChannelModalProps> = ({
           <label className="block text-xs font-semibold text-[var(--text-muted)] uppercase">Kanal Türü</label>
           <div className="space-y-2">
             {[
-              { id: 'text', label: 'Metin Kanalı', desc: 'Mesaj, görsel ve dosya paylaş', icon: Hash },
-              { id: 'voice', label: 'Sesli Kanal', desc: 'Ses, kamera ve ekran paylaşımı', icon: Volume2 },
+              { id: 'text', label: 'Metin Kanalı', desc: 'Mesaj, anket, GIF ve dosya paylaş', icon: Hash },
+              { id: 'voice', label: 'Sesli Kanal', desc: 'Ses, ses tahtası, kamera ve ekran paylaşımı', icon: Volume2 },
               { id: 'announcement', label: 'Duyuru Kanalı', desc: 'Önemli topluluk güncellemeleri', icon: Megaphone },
             ].map((item) => {
               const Icon = item.icon;
@@ -512,6 +536,35 @@ export const CreateChannelModal: React.FC<CreateChannelModalProps> = ({
             className="w-full px-3.5 py-2.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] focus:border-[#5865F2] text-sm text-white outline-none"
           />
         </div>
+
+        {type !== 'voice' && (
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <label className="block text-xs font-semibold text-[var(--text-muted)] uppercase">Yavaş Mod</label>
+              <select
+                value={slowmodeSeconds}
+                onChange={(e) => setSlowmodeSeconds(Number(e.target.value))}
+                className="w-full px-3 py-2 rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] text-xs text-white outline-none"
+              >
+                <option value={0}>Kapalı</option>
+                <option value={5}>5 saniye</option>
+                <option value={15}>15 saniye</option>
+                <option value={30}>30 saniye</option>
+                <option value={60}>1 dakika</option>
+                <option value={120}>2 dakika</option>
+              </select>
+            </div>
+            <label className="flex items-center justify-between px-3 py-2 mt-5 rounded-xl bg-[var(--bg-card)] border border-[var(--border-subtle)] cursor-pointer">
+              <span className="text-xs font-medium text-white">NSFW (+18)</span>
+              <input
+                type="checkbox"
+                checked={nsfw}
+                onChange={(e) => setNsfw(e.target.checked)}
+                className="w-4 h-4 accent-[#5865F2]"
+              />
+            </label>
+          </div>
+        )}
 
         <button
           type="submit"
@@ -579,18 +632,26 @@ async function prepareCustomEmojiDataUrl(file: File): Promise<string> {
 interface ServerSettingsModalProps {
   server: ServerDoc;
   members: ServerMember[];
+  channels: ChannelDoc[];
   serverEmojis: ServerEmoji[];
   myRole: MemberRole;
-  initialTab?: 'general' | 'members' | 'bots' | 'emojis';
+  userOrbs: number;
+  initialTab?: 'general' | 'members' | 'bots' | 'emojis' | 'boost';
   onClose: () => void;
   onSave: (updates: {
     name: string;
     description: string;
     iconEmoji: string;
     iconColor: string;
+    bannerColor?: string;
     isPublic: boolean;
     enabledBots?: string[];
   }) => Promise<void>;
+  onBoostServer: () => Promise<void>;
+  onUpdateChannel: (
+    channelId: string,
+    updates: { slowmodeSeconds?: number; nsfw?: boolean }
+  ) => Promise<void>;
   onChangeRole: (member: ServerMember, role: Exclude<MemberRole, 'owner'>) => Promise<void>;
   onKick: (member: ServerMember) => Promise<void>;
   onDeleteServer: () => Promise<void>;
@@ -601,11 +662,15 @@ interface ServerSettingsModalProps {
 export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
   server,
   members,
+  channels,
   serverEmojis,
   myRole,
+  userOrbs,
   initialTab,
   onClose,
   onSave,
+  onBoostServer,
+  onUpdateChannel,
   onChangeRole,
   onKick,
   onDeleteServer,
@@ -613,13 +678,15 @@ export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
   onDeleteEmoji,
 }) => {
   const canManageGeneral = myRole === 'owner' || myRole === 'admin';
-  const [tab, setTab] = useState<'general' | 'members' | 'bots' | 'emojis'>(
-    initialTab || (canManageGeneral ? 'general' : 'emojis')
+  const canManageMod = myRole === 'owner' || myRole === 'admin' || myRole === 'moderator';
+  const [tab, setTab] = useState<'general' | 'members' | 'bots' | 'emojis' | 'boost'>(
+    initialTab || (canManageGeneral ? 'general' : 'boost')
   );
   const [name, setName] = useState(server.name);
   const [description, setDescription] = useState(server.description);
   const [iconEmoji, setIconEmoji] = useState(server.iconEmoji);
   const [iconColor, setIconColor] = useState(server.iconColor);
+  const [bannerColor, setBannerColor] = useState(server.bannerColor || 'anim:anime-night');
   const [isPublic, setIsPublic] = useState(server.isPublic);
   const [enabledBots, setEnabledBots] = useState<string[]>(
     server.enabledBots && server.enabledBots.length > 0
@@ -627,6 +694,8 @@ export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
       : ['turcord_bot', 'mod_bot', 'music_bot']
   );
   const [saving, setSaving] = useState(false);
+  const [boosting, setBoosting] = useState(false);
+  const [boostError, setBoostError] = useState<string | null>(null);
 
   // Custom Emoji upload state
   const [emojiName, setEmojiName] = useState('');
@@ -634,12 +703,15 @@ export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
   const [emojiError, setEmojiError] = useState<string | null>(null);
   const [emojiSaving, setEmojiSaving] = useState(false);
 
+  const boostCount = server.boostCount || 0;
+  const boostLevel = boostCount >= 7 ? 3 : boostCount >= 3 ? 2 : boostCount >= 1 ? 1 : 0;
+
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim() || saving) return;
     setSaving(true);
     try {
-      await onSave({ name, description, iconEmoji, iconColor, isPublic, enabledBots });
+      await onSave({ name, description, iconEmoji, iconColor, bannerColor, isPublic, enabledBots });
       onClose();
     } finally {
       setSaving(false);
@@ -655,9 +727,23 @@ export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
       description,
       iconEmoji,
       iconColor,
+      bannerColor,
       isPublic,
       enabledBots: next,
     });
+  };
+
+  const handleBoost = async () => {
+    if (boosting) return;
+    setBoosting(true);
+    setBoostError(null);
+    try {
+      await onBoostServer();
+    } catch (err) {
+      setBoostError(err instanceof Error ? err.message : 'Takviye yapılamadı.');
+    } finally {
+      setBoosting(false);
+    }
   };
 
   const handleEmojiFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -720,7 +806,7 @@ export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
                   tab === 'general' ? 'bg-[#5865F2] text-white' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-card)]'
                 }`}
               >
-                Genel Ayarlar
+                Genel
               </button>
               <button
                 onClick={() => setTab('members')}
@@ -729,7 +815,7 @@ export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
                 }`}
               >
                 <Users className="w-3.5 h-3.5" />
-                <span>Üyeler &amp; Roller ({members.length})</span>
+                <span>Üyeler ({members.length})</span>
               </button>
               <button
                 onClick={() => setTab('bots')}
@@ -738,18 +824,31 @@ export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
                 }`}
               >
                 <Bot className="w-3.5 h-3.5" />
-                <span>Botlar &amp; Otomasyon</span>
+                <span>Botlar</span>
               </button>
             </>
           )}
+          {canManageMod && (
+            <button
+              onClick={() => setTab('emojis')}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap cursor-pointer ${
+                tab === 'emojis' ? 'bg-[#5865F2] text-white' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-card)]'
+              }`}
+            >
+              <Smile className="w-3.5 h-3.5" />
+              <span>Emojiler ({serverEmojis.length})</span>
+            </button>
+          )}
           <button
-            onClick={() => setTab('emojis')}
+            onClick={() => setTab('boost')}
             className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap cursor-pointer ${
-              tab === 'emojis' ? 'bg-[#5865F2] text-white' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-card)]'
+              tab === 'boost'
+                ? 'bg-gradient-to-r from-[#EC4899] to-[#A855F7] text-white'
+                : 'text-[#F472B6] hover:bg-[var(--bg-card)]'
             }`}
           >
-            <Smile className="w-3.5 h-3.5" />
-            <span>Özel Emojiler ({serverEmojis.length})</span>
+            <Zap className="w-3.5 h-3.5" />
+            <span>Takviye ({boostCount})</span>
           </button>
         </div>
 
@@ -814,6 +913,67 @@ export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
               </div>
             </div>
 
+            <div className="space-y-1.5">
+              <label className="block text-xs font-semibold text-[var(--text-muted)] uppercase">Sunucu Bannerı</label>
+              <div className="grid grid-cols-3 gap-2">
+                {ANIMATED_BANNERS.map((b) => (
+                  <button
+                    key={b.id}
+                    type="button"
+                    onClick={() => setBannerColor(b.id)}
+                    className={`h-10 rounded-xl ${b.className} border cursor-pointer flex items-end p-1.5 ${
+                      bannerColor === b.id ? 'border-white ring-2 ring-[#5865F2]' : 'border-white/10'
+                    }`}
+                  >
+                    <span className="text-[10px] font-semibold text-white drop-shadow truncate">{b.name}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Channel Slowmode Quick Settings */}
+            {channels.filter((c) => c.type !== 'voice').length > 0 && (
+              <div className="p-3 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-subtle)] space-y-2">
+                <p className="text-[11px] font-semibold text-[var(--text-muted)] uppercase flex items-center gap-1.5">
+                  <Clock className="w-3.5 h-3.5" />
+                  <span>Kanal Yavaş Mod &amp; +18 Ayarı</span>
+                </p>
+                <div className="space-y-1.5 max-h-36 overflow-y-auto">
+                  {channels
+                    .filter((c) => c.type !== 'voice')
+                    .map((ch) => (
+                      <div key={ch.id} className="flex items-center justify-between gap-2 text-xs">
+                        <span className="text-white truncate">#{ch.name}</span>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <select
+                            value={ch.slowmodeSeconds || 0}
+                            onChange={(e) =>
+                              onUpdateChannel(ch.id, { slowmodeSeconds: Number(e.target.value) })
+                            }
+                            className="px-2 py-1 rounded bg-[var(--bg-input)] border border-[var(--border-subtle)] text-[11px] text-white outline-none"
+                          >
+                            <option value={0}>Yavaş Mod: Yok</option>
+                            <option value={5}>5 sn</option>
+                            <option value={15}>15 sn</option>
+                            <option value={30}>30 sn</option>
+                            <option value={60}>1 dk</option>
+                          </select>
+                          <label className="inline-flex items-center gap-1 text-[11px] text-[var(--text-muted)] cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={Boolean(ch.nsfw)}
+                              onChange={(e) => onUpdateChannel(ch.id, { nsfw: e.target.checked })}
+                              className="w-3.5 h-3.5 accent-[#5865F2]"
+                            />
+                            <span>+18</span>
+                          </label>
+                        </div>
+                      </div>
+                    ))}
+                </div>
+              </div>
+            )}
+
             <label className="flex items-center justify-between p-3 rounded-xl bg-[var(--bg-card)] cursor-pointer">
               <span className="text-sm text-white">Herkese Açık Keşfet Listesinde Göster</span>
               <input
@@ -849,7 +1009,7 @@ export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
               </button>
             </div>
           </form>
-        ) : tab === 'members' ? (
+        ) : tab === 'members' && canManageGeneral ? (
           <div className="space-y-2">
             {members.map((m) => (
               <div
@@ -857,7 +1017,12 @@ export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
                 className="flex items-center justify-between gap-3 p-2.5 rounded-xl bg-[var(--bg-card)]"
               >
                 <div className="flex items-center gap-2.5 min-w-0">
-                  <Avatar src={m.avatarUrl} name={m.displayName} size="sm" />
+                  <Avatar
+                    src={m.avatarUrl}
+                    name={m.displayName}
+                    size="sm"
+                    decoration={m.avatarDecoration}
+                  />
                   <div className="min-w-0">
                     <p className="text-sm font-medium text-white truncate">{m.displayName}</p>
                     <p className="text-xs text-[var(--text-muted)] truncate">
@@ -937,7 +1102,7 @@ export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
               );
             })}
           </div>
-        ) : (
+        ) : tab === 'emojis' && canManageMod ? (
           <div className="space-y-4">
             <p className="text-xs text-[var(--text-muted)] leading-relaxed">
               Sunucuna PNG, WebP veya hareketli GIF formatında özel emojiler yükle. Üyeler emoji seçiciden veya sohbete{' '}
@@ -1051,6 +1216,63 @@ export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
               </div>
             )}
           </div>
+        ) : (
+          <div className="space-y-4">
+            <div className="rounded-2xl overflow-hidden border border-[#F472B6]/35 bg-[var(--bg-card)]">
+              <ProfileBanner bannerColor={bannerColor} className="h-20 flex items-center px-5">
+                <div className="relative z-10 flex items-center gap-3">
+                  <div className="w-11 h-11 rounded-2xl bg-black/35 flex items-center justify-center text-2xl">
+                    {server.iconEmoji}
+                  </div>
+                  <div>
+                    <p className="font-display text-base font-bold text-white">{server.name}</p>
+                    <p className="text-xs text-white/85">
+                      Seviye {boostLevel} · {boostCount} Takviye
+                    </p>
+                  </div>
+                </div>
+              </ProfileBanner>
+              <div className="p-4 space-y-3">
+                <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                  {[
+                    { lvl: 1, req: 1, title: 'Seviye 1', perk: 'Hareketli Simge & Rozet' },
+                    { lvl: 2, req: 3, title: 'Seviye 2', perk: 'Özel Banner & HD Ses' },
+                    { lvl: 3, req: 7, title: 'Seviye 3', perk: 'Maksimum Topluluk Gücü' },
+                  ].map((tier) => (
+                    <div
+                      key={tier.lvl}
+                      className={`p-2.5 rounded-xl border ${
+                        boostLevel >= tier.lvl
+                          ? 'bg-[#EC4899]/15 border-[#EC4899] text-white'
+                          : 'bg-[var(--bg-surface)] border-[var(--border-subtle)] text-[var(--text-muted)]'
+                      }`}
+                    >
+                      <p className="font-bold">{tier.title}</p>
+                      <p className="text-[10px] mt-0.5">{tier.req} Takviye</p>
+                      <p className="text-[10px] mt-1 opacity-85">{tier.perk}</p>
+                    </div>
+                  ))}
+                </div>
+
+                {boostError && <p className="text-xs text-rose-400">{boostError}</p>}
+
+                <div className="flex items-center justify-between gap-3 pt-1">
+                  <span className="text-xs text-[var(--text-muted)]">
+                    Bakiyen: <strong className="text-white tabular-nums">{userOrbs} Orbs</strong>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleBoost}
+                    disabled={boosting || userOrbs < 500}
+                    className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-[#EC4899] to-[#8B5CF6] hover:opacity-95 disabled:opacity-50 text-white text-xs font-semibold cursor-pointer"
+                  >
+                    <Zap className="w-4 h-4" />
+                    <span>{boosting ? 'Takviye Yapılıyor...' : '500 Orbs ile Takviye Et'}</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
         )}
       </div>
     </ModalShell>
@@ -1070,6 +1292,51 @@ type SettingsSubPage =
   | 'notifications'
   | 'advanced';
 
+async function prepareCompactProfileMedia(file: File, kind: 'avatar' | 'banner'): Promise<string> {
+  if (file.type === 'image/gif') {
+    const raw = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ''));
+      reader.onerror = () => reject(new Error('GIF okunamadı.'));
+      reader.readAsDataURL(file);
+    });
+    if (raw.length <= 11800) return raw;
+    throw new Error('GIF dosyası çok büyük (~9 KB altı GIF yükleyin veya https:// GIF linki yapıştırın).');
+  }
+
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const targetW = kind === 'avatar' ? 96 : 320;
+        const targetH = kind === 'avatar' ? 96 : 110;
+        const canvas = document.createElement('canvas');
+        canvas.width = targetW;
+        canvas.height = targetH;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return reject(new Error('Görsel işlenemedi.'));
+        const scale = Math.max(targetW / img.width, targetH / img.height);
+        const w = img.width * scale;
+        const h = img.height * scale;
+        ctx.drawImage(img, (targetW - w) / 2, (targetH - h) / 2, w, h);
+        let dataUrl = canvas.toDataURL('image/webp', 0.8);
+        if (!dataUrl.startsWith('data:image/webp') || dataUrl.length > 11800) {
+          dataUrl = canvas.toDataURL('image/jpeg', 0.68);
+        }
+        if (dataUrl.length > 11800) {
+          return reject(new Error('Görsel sıkıştırılamadı, daha küçük bir görsel seçin.'));
+        }
+        resolve(dataUrl);
+      };
+      img.onerror = () => reject(new Error('Geçerli bir görsel seçin.'));
+      img.src = String(reader.result || '');
+    };
+    reader.onerror = () => reject(new Error('Dosya okunamadı.'));
+    reader.readAsDataURL(file);
+  });
+}
+
 interface UserSettingsModalProps {
   profile: PublicProfile;
   unreadNotificationsCount: number;
@@ -1083,12 +1350,16 @@ interface UserSettingsModalProps {
     displayName: string;
     username: string;
     bio: string;
+    pronouns?: string;
     status: UserStatus;
+    statusEmoji?: string;
     customStatus: string;
     bannerColor: string;
+    bannerUrl?: string;
     avatarUrl: string;
     clanTag?: string;
     connections?: UserConnection[];
+    activity?: UserActivity;
   }) => Promise<void>;
   onSignOut: () => Promise<void>;
 }
@@ -1112,10 +1383,19 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   const [displayName, setDisplayName] = useState(profile.displayName);
   const [username, setUsername] = useState(profile.username);
   const [bio, setBio] = useState(profile.bio);
+  const [pronouns, setPronouns] = useState(profile.pronouns || '');
   const [status, setStatus] = useState<UserStatus>(profile.status);
+  const [statusEmoji, setStatusEmoji] = useState(profile.statusEmoji || '');
   const [customStatus, setCustomStatus] = useState(profile.customStatus);
+  const [avatarUrl, setAvatarUrl] = useState(profile.avatarUrl || '');
   const [bannerColor, setBannerColor] = useState(profile.bannerColor || '#5865F2');
+  const [bannerUrl, setBannerUrl] = useState(profile.bannerUrl || '');
   const [clanTag, setClanTag] = useState(profile.clanTag || '');
+  const [activityType, setActivityType] = useState<ActivityType>(
+    profile.activity?.type || 'playing'
+  );
+  const [activityName, setActivityName] = useState(profile.activity?.name || '');
+  const [activityDetails, setActivityDetails] = useState(profile.activity?.details || '');
   const [connections, setConnections] = useState<UserConnection[]>(profile.connections || []);
   const [newConnPlatform, setNewConnPlatform] = useState<UserConnection['platform']>('Spotify');
   const [newConnHandle, setNewConnHandle] = useState('');
@@ -1200,6 +1480,10 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   const handleSaveProfile = async (e?: React.FormEvent) => {
     e?.preventDefault();
     if (saving) return;
+    if (!isSafeMediaUrl(avatarUrl.trim()) || !isSafeMediaUrl(bannerUrl.trim())) {
+      setError('Avatar veya Banner linki https://, preset: veya geçerli görsel olmalıdır.');
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
@@ -1207,12 +1491,20 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         displayName,
         username,
         bio,
+        pronouns,
         status,
+        statusEmoji,
         customStatus,
         bannerColor,
-        avatarUrl: profile.avatarUrl,
+        bannerUrl: bannerUrl.trim(),
+        avatarUrl: avatarUrl.trim(),
         clanTag,
         connections,
+        activity: {
+          type: activityType,
+          name: activityName.trim(),
+          details: activityDetails.trim(),
+        },
       });
       setSavedNotice(true);
       setTimeout(() => setSavedNotice(false), 1800);
@@ -1521,6 +1813,104 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
           {subPage === 'account' && (
             <form onSubmit={handleSaveProfile} className="space-y-4">
+              {/* Live Profile Mini Card */}
+              <div className="rounded-2xl overflow-hidden border border-[var(--border-subtle)] bg-[var(--bg-card)]">
+                <ProfileBanner bannerColor={bannerColor} bannerUrl={bannerUrl} className="h-20" />
+                <div className="px-4 pb-3 -mt-8 flex items-end justify-between gap-3">
+                  <div className="flex items-end gap-3 min-w-0">
+                    <Avatar
+                      src={avatarUrl}
+                      name={displayName}
+                      size="lg"
+                      status={status}
+                      showStatus
+                      ringBg="var(--bg-card)"
+                      decoration={profile.avatarDecoration}
+                    />
+                    <div className="min-w-0 pb-0.5">
+                      <p className="text-sm font-bold text-white truncate">{displayName || username}</p>
+                      <p className="text-[11px] text-[var(--text-muted)] truncate">
+                        @{username} {pronouns ? `· ${pronouns}` : ''}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onClose();
+                      onOpenShop('shop');
+                    }}
+                    className="px-3 py-1.5 rounded-xl bg-[#A855F7]/20 hover:bg-[#A855F7]/30 text-[#E9D5FF] text-[11px] font-semibold flex items-center gap-1 cursor-pointer shrink-0"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                    <span>Çerçeve &amp; Efekt</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Avatar Picker: Device Upload + Preset Animated + URL/GIF */}
+              <div className="p-3.5 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-subtle)] space-y-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <label className="text-xs font-semibold text-[var(--text-muted)] uppercase">
+                    Profil Fotoğrafı / Hareketli Avatar
+                  </label>
+                  <label className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#5865F2] hover:bg-[#4752C4] text-white text-[11px] font-medium cursor-pointer">
+                    <Upload className="w-3 h-3" />
+                    <span>Fotoğraf Yükle</span>
+                    <input
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp,image/gif"
+                      className="hidden"
+                      onChange={async (e) => {
+                        const f = e.target.files?.[0];
+                        e.target.value = '';
+                        if (!f) return;
+                        setError(null);
+                        try {
+                          const dataUrl = await prepareCompactProfileMedia(f, 'avatar');
+                          setAvatarUrl(dataUrl);
+                        } catch (err) {
+                          setError(err instanceof Error ? err.message : 'Fotoğraf yüklenemedi.');
+                        }
+                      }}
+                    />
+                  </label>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  {ANIMATED_AVATAR_PRESETS.map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      title={p.name}
+                      onClick={() => setAvatarUrl(p.id)}
+                      className={`p-0.5 rounded-full border-2 cursor-pointer transition-transform hover:scale-105 ${
+                        avatarUrl === p.id ? 'border-[#5865F2]' : 'border-transparent'
+                      }`}
+                    >
+                      <Avatar src={p.id} name={p.name} size="sm" />
+                    </button>
+                  ))}
+                  {avatarUrl && (
+                    <button
+                      type="button"
+                      onClick={() => setAvatarUrl('')}
+                      className="px-2 py-1 rounded-lg bg-[var(--bg-surface)] text-[11px] text-[var(--text-muted)] hover:text-white cursor-pointer"
+                    >
+                      Sıfırla
+                    </button>
+                  )}
+                </div>
+
+                <input
+                  type="url"
+                  value={avatarUrl.startsWith('data:') ? '' : avatarUrl}
+                  onChange={(e) => setAvatarUrl(e.target.value)}
+                  placeholder="Veya hareketli GIF / resim linki yapıştır (https://...)"
+                  className="w-full px-3 py-2 rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] text-xs text-white placeholder-[var(--text-muted)] outline-none"
+                />
+              </div>
+
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="space-y-1.5">
                   <label className="block text-xs font-semibold text-[var(--text-muted)] uppercase">
@@ -1550,10 +1940,10 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div className="space-y-1.5">
                   <label className="block text-xs font-semibold text-[var(--text-muted)] uppercase">
-                    Çevrimiçi Durum
+                    Durum
                   </label>
                   <select
                     value={status}
@@ -1568,31 +1958,123 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
                 </div>
                 <div className="space-y-1.5">
                   <label className="block text-xs font-semibold text-[var(--text-muted)] uppercase">
+                    Zamirler (Pronouns)
+                  </label>
+                  <input
+                    type="text"
+                    value={pronouns}
+                    onChange={(e) => setPronouns(e.target.value)}
+                    placeholder="Örn: o / they"
+                    maxLength={30}
+                    className="w-full px-3 py-2 rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] text-sm text-white outline-none"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-semibold text-[var(--text-muted)] uppercase">
                     Klan Etiketi
                   </label>
                   <input
                     type="text"
                     value={clanTag}
                     onChange={(e) => setClanTag(e.target.value.toUpperCase().slice(0, 8))}
-                    placeholder="Örn: CİX"
+                    placeholder="Örn: GÜL"
                     maxLength={8}
                     className="w-full px-3 py-2 rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] text-sm text-white font-mono uppercase outline-none"
                   />
                 </div>
               </div>
 
-              <div className="space-y-1.5">
-                <label className="block text-xs font-semibold text-[var(--text-muted)] uppercase">
-                  Özel Durum (Düşünce Balonu)
+              <div className="grid grid-cols-[72px_1fr] gap-2">
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-semibold text-[var(--text-muted)] uppercase">
+                    Emoji
+                  </label>
+                  <input
+                    type="text"
+                    value={statusEmoji}
+                    onChange={(e) => setStatusEmoji(e.target.value)}
+                    placeholder="🌹"
+                    maxLength={16}
+                    className="w-full px-3 py-2 rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] text-sm text-center text-white outline-none"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-semibold text-[var(--text-muted)] uppercase">
+                    Özel Durum (Düşünce Balonu)
+                  </label>
+                  <input
+                    type="text"
+                    value={customStatus}
+                    onChange={(e) => setCustomStatus(e.target.value)}
+                    placeholder="Şu an ne yapıyorsun?"
+                    maxLength={100}
+                    className="w-full px-3 py-2 rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] text-sm text-white outline-none"
+                  />
+                </div>
+              </div>
+
+              {/* Rich Presence / Activity */}
+              <div className="p-3.5 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-subtle)] space-y-2.5">
+                <label className="text-xs font-semibold text-[var(--text-muted)] uppercase flex items-center gap-1.5">
+                  <Gamepad2 className="w-3.5 h-3.5 text-[#5865F2]" />
+                  <span>Etkinlik / Oynuyor Durumu</span>
                 </label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <select
+                    value={activityType}
+                    onChange={(e) => setActivityType(e.target.value as ActivityType)}
+                    className="px-3 py-2 rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] text-xs text-white outline-none"
+                  >
+                    <option value="playing">Oynuyor</option>
+                    <option value="listening">Dinliyor</option>
+                    <option value="watching">İzliyor</option>
+                    <option value="streaming">Yayında</option>
+                  </select>
+                  <input
+                    type="text"
+                    value={activityName}
+                    onChange={(e) => setActivityName(e.target.value)}
+                    placeholder="Oyun veya aktivite adı..."
+                    maxLength={50}
+                    className="px-3 py-2 rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] text-xs text-white outline-none"
+                  />
+                </div>
                 <input
                   type="text"
-                  value={customStatus}
-                  onChange={(e) => setCustomStatus(e.target.value)}
-                  placeholder="Son zamanlarda ne dinliyorsun veya oynuyorsun?"
-                  maxLength={100}
-                  className="w-full px-3 py-2 rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] text-sm text-white outline-none"
+                  value={activityDetails}
+                  onChange={(e) => setActivityDetails(e.target.value)}
+                  placeholder="Detay (örn: Dereceli · Takım 2/5)"
+                  maxLength={60}
+                  className="w-full px-3 py-2 rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] text-xs text-white outline-none"
                 />
+                <div className="flex flex-wrap gap-1.5">
+                  {ACTIVITY_PRESETS.map((p) => (
+                    <button
+                      key={p.name}
+                      type="button"
+                      onClick={() => {
+                        setActivityType(p.type);
+                        setActivityName(p.name);
+                        setActivityDetails(p.details);
+                      }}
+                      className="px-2.5 py-1 rounded-lg bg-[var(--bg-surface)] hover:bg-[var(--bg-elevated)] text-[11px] text-[var(--text-secondary)] hover:text-white cursor-pointer"
+                    >
+                      {p.name}
+                    </button>
+                  ))}
+                  {activityName && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActivityName('');
+                        setActivityDetails('');
+                      }}
+                      className="px-2.5 py-1 rounded-lg bg-rose-500/10 text-rose-400 text-[11px] cursor-pointer"
+                    >
+                      Temizle
+                    </button>
+                  )}
+                </div>
               </div>
 
               <div className="space-y-1.5">
@@ -1609,23 +2091,76 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
                 />
               </div>
 
-              <div className="space-y-1.5">
-                <label className="block text-xs font-semibold text-[var(--text-muted)] uppercase">
-                  Banner Rengi
-                </label>
-                <div className="flex gap-2">
-                  {['#E9D5FF', '#5865F2', '#248046', '#DA373C', '#F59E0B', '#0EA5E9'].map((col) => (
+              {/* Banner Colors, Animated Banners & Banner GIF URL */}
+              <div className="p-3.5 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-subtle)] space-y-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <label className="text-xs font-semibold text-[var(--text-muted)] uppercase flex items-center gap-1.5">
+                    <ImageIcon className="w-3.5 h-3.5 text-[#EC4899]" />
+                    <span>Banner Teması &amp; GIF</span>
+                  </label>
+                  <label className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[var(--bg-elevated)] hover:bg-[#5865F2] text-white text-[11px] cursor-pointer">
+                    <Upload className="w-3 h-3" />
+                    <span>Banner Yükle</span>
+                    <input
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp,image/gif"
+                      className="hidden"
+                      onChange={async (e) => {
+                        const f = e.target.files?.[0];
+                        e.target.value = '';
+                        if (!f) return;
+                        setError(null);
+                        try {
+                          const dataUrl = await prepareCompactProfileMedia(f, 'banner');
+                          setBannerUrl(dataUrl);
+                        } catch (err) {
+                          setError(err instanceof Error ? err.message : 'Banner yüklenemedi.');
+                        }
+                      }}
+                    />
+                  </label>
+                </div>
+
+                <div className="flex flex-wrap gap-2">
+                  {SOLID_BANNER_COLORS.map((col) => (
                     <button
                       key={col}
                       type="button"
-                      onClick={() => setBannerColor(col)}
+                      onClick={() => {
+                        setBannerColor(col);
+                        setBannerUrl('');
+                      }}
                       style={{ backgroundColor: col }}
                       className={`w-7 h-7 rounded-lg cursor-pointer ${
-                        bannerColor === col ? 'ring-2 ring-white' : ''
+                        bannerColor === col && !bannerUrl ? 'ring-2 ring-white' : ''
                       }`}
                     />
                   ))}
+                  {ANIMATED_BANNERS.map((b) => (
+                    <button
+                      key={b.id}
+                      type="button"
+                      title={b.name}
+                      onClick={() => {
+                        setBannerColor(b.id);
+                        setBannerUrl('');
+                      }}
+                      className={`px-2.5 h-7 rounded-lg ${b.className} text-[10px] font-semibold text-white cursor-pointer ${
+                        bannerColor === b.id && !bannerUrl ? 'ring-2 ring-white' : ''
+                      }`}
+                    >
+                      {b.name.split(' ')[0]}
+                    </button>
+                  ))}
                 </div>
+
+                <input
+                  type="url"
+                  value={bannerUrl.startsWith('data:') ? '' : bannerUrl}
+                  onChange={(e) => setBannerUrl(e.target.value)}
+                  placeholder="Veya hareketli GIF banner linki yapıştır (https://...)"
+                  className="w-full px-3 py-2 rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] text-xs text-white placeholder-[var(--text-muted)] outline-none"
+                />
               </div>
 
               {error && <p className="text-xs text-rose-400">{error}</p>}

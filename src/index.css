@@ -83,21 +83,161 @@
   }
 }
 
-/* Avatar Decoration Rings */
+/* Avatar Decoration Rings & Animations */
+@keyframes turcord-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+@keyframes turcord-spin-rev {
+  from { transform: rotate(360deg); }
+  to { transform: rotate(0deg); }
+}
+@keyframes turcord-pulse-ring {
+  0%, 100% { transform: scale(1); opacity: 0.85; }
+  50% { transform: scale(1.06); opacity: 1; }
+}
+@keyframes turcord-float-y {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-3px); }
+}
+@keyframes turcord-glitch {
+  0%, 92%, 100% { transform: translate(0, 0); filter: hue-rotate(0deg); }
+  94% { transform: translate(-2px, 1px); filter: hue-rotate(90deg); }
+  96% { transform: translate(2px, -1px); filter: hue-rotate(-90deg); }
+  98% { transform: translate(-1px, -1px); filter: hue-rotate(45deg); }
+}
+@keyframes turcord-petal-fall {
+  0% { transform: translate3d(0, -12%, 0) rotate(0deg); opacity: 0; }
+  12% { opacity: 0.92; }
+  88% { opacity: 0.9; }
+  100% { transform: translate3d(26px, 440px, 0) rotate(320deg); opacity: 0; }
+}
+@keyframes turcord-spark-rise {
+  0% { transform: translate3d(0, 0, 0) scale(0.7); opacity: 0; }
+  20% { opacity: 1; }
+  100% { transform: translate3d(-12px, -340px, 0) scale(1.25); opacity: 0; }
+}
+@keyframes turcord-matrix-drop {
+  0% { transform: translateY(-40px); opacity: 0; }
+  20% { opacity: 0.9; }
+  100% { transform: translateY(420px); opacity: 0; }
+}
+@keyframes turcord-banner-flow {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+@keyframes turcord-shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(200%); }
+}
+@keyframes turcord-eq {
+  0%, 100% { transform: scaleY(0.35); }
+  50% { transform: scaleY(1); }
+}
+
+.turcord-spin-slow { animation: turcord-spin 16s linear infinite; }
+.turcord-spin-med { animation: turcord-spin 8s linear infinite; }
+.turcord-spin-rev { animation: turcord-spin-rev 12s linear infinite; }
+.turcord-pulse-ring { animation: turcord-pulse-ring 2.6s ease-in-out infinite; }
+.turcord-float-y { animation: turcord-float-y 2.8s ease-in-out infinite; }
+.turcord-glitch { animation: turcord-glitch 2.5s steps(1) infinite; }
+
 .deco-cyber-ring {
-  box-shadow: 0 0 0 2.5px #38BDF8, 0 0 12px rgba(56, 189, 248, 0.45);
+  box-shadow: 0 0 0 2.5px #38BDF8, 0 0 12px rgba(56, 189, 248, 0.5);
 }
 .deco-emerald-flame {
-  box-shadow: 0 0 0 2.5px #23A55A, 0 0 12px rgba(35, 165, 90, 0.45);
+  box-shadow: 0 0 0 2.5px #23A55A, 0 0 12px rgba(35, 165, 90, 0.5);
 }
 .deco-crimson-pulse {
-  box-shadow: 0 0 0 2.5px #F23F43, 0 0 12px rgba(242, 63, 67, 0.45);
+  box-shadow: 0 0 0 2.5px #F23F43, 0 0 12px rgba(242, 63, 67, 0.5);
 }
 .deco-gold-halo {
-  box-shadow: 0 0 0 2.5px #F59E0B, 0 0 14px rgba(245, 158, 11, 0.5);
+  box-shadow: 0 0 0 2.5px #F59E0B, 0 0 14px rgba(245, 158, 11, 0.55);
 }
 .deco-aurora-orbit {
-  box-shadow: 0 0 0 2.5px #A855F7, 0 0 14px rgba(168, 85, 247, 0.5);
+  box-shadow: 0 0 0 2.5px #A855F7, 0 0 14px rgba(168, 85, 247, 0.55);
+}
+
+/* Animated Profile Banners */
+.banner-anim-crimson-rose {
+  background: linear-gradient(125deg, #3B0718, #9F1239, #E11D48, #881337, #3B0718);
+  background-size: 300% 300%;
+  animation: turcord-banner-flow 9s ease infinite;
+}
+.banner-anim-sakura {
+  background: linear-gradient(125deg, #4A0D2E, #BE185D, #F472B6, #831843, #4A0D2E);
+  background-size: 300% 300%;
+  animation: turcord-banner-flow 10s ease infinite;
+}
+.banner-anim-anime-night {
+  background: linear-gradient(125deg, #1E1B4B, #6D28D9, #EC4899, #312E81, #1E1B4B);
+  background-size: 300% 300%;
+  animation: turcord-banner-flow 8s ease infinite;
+}
+.banner-anim-cyberpunk {
+  background: linear-gradient(125deg, #082F49, #06B6D4, #4F46E5, #0E7490, #082F49);
+  background-size: 300% 300%;
+  animation: turcord-banner-flow 7s ease infinite;
+}
+.banner-anim-aurora {
+  background: linear-gradient(125deg, #064E3B, #10B981, #7C3AED, #0F766E, #064E3B);
+  background-size: 300% 300%;
+  animation: turcord-banner-flow 11s ease infinite;
+}
+.banner-anim-galaxy {
+  background: linear-gradient(125deg, #090D16, #312E81, #9333EA, #1D4ED8, #090D16);
+  background-size: 300% 300%;
+  animation: turcord-banner-flow 12s ease infinite;
+}
+
+/* Member Nameplates */
+.nameplate-sakura-mist {
+  background: linear-gradient(90deg, rgba(244, 114, 182, 0.22), rgba(236, 72, 153, 0.08), transparent);
+  border: 1px solid rgba(244, 114, 182, 0.28);
+}
+.nameplate-crimson-rose {
+  background: linear-gradient(90deg, rgba(244, 63, 94, 0.24), rgba(159, 18, 57, 0.1), transparent);
+  border: 1px solid rgba(244, 63, 94, 0.3);
+}
+.nameplate-cyber-grid {
+  background: linear-gradient(90deg, rgba(34, 211, 238, 0.22), rgba(88, 101, 242, 0.1), transparent);
+  border: 1px solid rgba(34, 211, 238, 0.3);
+}
+.nameplate-aurora-glow {
+  background: linear-gradient(90deg, rgba(168, 85, 247, 0.24), rgba(16, 185, 129, 0.12), transparent);
+  border: 1px solid rgba(168, 85, 247, 0.3);
+}
+.nameplate-gold-royal {
+  background: linear-gradient(90deg, rgba(245, 158, 11, 0.24), rgba(251, 191, 36, 0.08), transparent);
+  border: 1px solid rgba(245, 158, 11, 0.32);
+}
+.nameplate-anime-speed {
+  background: repeating-linear-gradient(
+    -55deg,
+    rgba(236, 72, 153, 0.16),
+    rgba(236, 72, 153, 0.16) 8px,
+    rgba(88, 101, 242, 0.08) 8px,
+    rgba(88, 101, 242, 0.08) 16px
+  );
+  border: 1px solid rgba(236, 72, 153, 0.28);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .turcord-spin-slow,
+  .turcord-spin-med,
+  .turcord-spin-rev,
+  .turcord-pulse-ring,
+  .turcord-float-y,
+  .turcord-glitch,
+  .banner-anim-crimson-rose,
+  .banner-anim-sakura,
+  .banner-anim-anime-night,
+  .banner-anim-cyberpunk,
+  .banner-anim-aurora,
+  .banner-anim-galaxy {
+    animation: none !important;
+  }
 }
 
 ::-webkit-scrollbar {

@@ -207,7 +207,7 @@ export function useRealtimeSocket(
       await setDoc(doc(db, 'presence', p.uid), {
         uid: p.uid,
         displayName: (p.displayName || 'Kullanıcı').slice(0, 40),
-        avatarUrl: (p.avatarUrl || '').slice(0, 1000),
+        avatarUrl: (p.avatarUrl || '').slice(0, 12000),
         status: status === 'idle' || status === 'dnd' || status === 'offline' ? status : 'online',
         lastSeenAt: serverTimestamp(),
       });
@@ -234,7 +234,7 @@ export function useRealtimeSocket(
         uid: p.uid,
         displayName: (p.displayName || 'Kullanıcı').slice(0, 40),
         username,
-        avatarUrl: (p.avatarUrl || '').slice(0, 1000),
+        avatarUrl: (p.avatarUrl || '').slice(0, 12000),
         muted: isEffectivelyMuted,
         deafened: deafenedRef.current,
         cameraOn: cameraOnRef.current,
@@ -718,7 +718,7 @@ export function useRealtimeSocket(
         id: callId,
         fromUid: p.uid,
         fromName: (p.displayName || 'Kullanıcı').slice(0, 40),
-        fromAvatar: (p.avatarUrl || '').slice(0, 1000),
+        fromAvatar: (p.avatarUrl || '').slice(0, 12000),
         roomKey,
         video: Boolean(video),
         status: 'ringing',

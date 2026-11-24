@@ -5,13 +5,60 @@ export type MemberRole = 'owner' | 'admin' | 'moderator' | 'member';
 export type ChannelType = 'text' | 'voice' | 'announcement';
 export type AppearanceTheme = 'oniks' | 'koyu' | 'gece';
 export type BotId = 'turcord_bot' | 'mod_bot' | 'music_bot';
+
 export type AvatarDecorationId =
   | 'none'
+  | 'crimson-rose'
+  | 'sakura-blossom'
+  | 'sunflower-bloom'
+  | 'enchanted-ivy'
+  | 'kawaii-cat-ears'
+  | 'anime-ki-aura'
+  | 'sharingan-vortex'
+  | 'mecha-hud'
+  | 'arcane-sigil'
+  | 'galaxy-butterfly'
+  | 'celestial-angel'
+  | 'glitch-cyber'
+  | 'dragon-flame'
   | 'cyber-ring'
   | 'emerald-flame'
   | 'crimson-pulse'
   | 'gold-halo'
   | 'aurora-orbit';
+
+export type ProfileEffectId =
+  | 'none'
+  | 'rose-petals'
+  | 'sakura-rain'
+  | 'anime-sparks'
+  | 'hearts-float'
+  | 'cyber-matrix'
+  | 'starfall'
+  | 'confetti-party';
+
+export type NameplateId =
+  | 'none'
+  | 'sakura-mist'
+  | 'crimson-rose'
+  | 'cyber-grid'
+  | 'aurora-glow'
+  | 'gold-royal'
+  | 'anime-speed';
+
+export type ActivityType = 'playing' | 'listening' | 'watching' | 'streaming';
+
+export interface UserActivity {
+  type: ActivityType;
+  name: string;
+  details?: string;
+}
+
+export interface ChatPoll {
+  question: string;
+  options: string[];
+  multiSelect?: boolean;
+}
 
 export const LIMITS = {
   USERNAME_MIN: 2,
@@ -19,7 +66,12 @@ export const LIMITS = {
   DISPLAY_NAME_MAX: 40,
   BIO_MAX: 300,
   CUSTOM_STATUS_MAX: 100,
+  STATUS_EMOJI_MAX: 16,
+  PRONOUNS_MAX: 30,
   CLAN_TAG_MAX: 8,
+  AVATAR_URL_MAX: 12000,
+  BANNER_COLOR_MAX: 40,
+  BANNER_URL_MAX: 12000,
   SERVER_NAME_MAX: 60,
   SERVER_DESC_MAX: 300,
   CHANNEL_NAME_MAX: 50,
@@ -42,11 +94,20 @@ export interface PublicProfile {
   displayName: string;
   avatarUrl: string;
   bannerColor: string;
+  bannerUrl?: string;
   bio: string;
+  pronouns?: string;
   status: UserStatus;
+  statusEmoji?: string;
   customStatus: string;
   clanTag?: string;
   avatarDecoration?: AvatarDecorationId;
+  profileEffect?: ProfileEffectId;
+  nameplate?: NameplateId;
+  activity?: UserActivity;
+  badges?: string[];
+  unlockedCosmetics?: string[];
+  claimedQuests?: string[];
   orbsBalance?: number;
   connections?: UserConnection[];
   theme?: AppearanceTheme;
@@ -95,6 +156,8 @@ export interface ServerDoc {
   description: string;
   iconEmoji: string;
   iconColor: string;
+  bannerColor?: string;
+  boostCount?: number;
   ownerId: string;
   isPublic: boolean;
   inviteCode: string;
@@ -123,6 +186,10 @@ export interface ServerMember {
   avatarUrl: string;
   role: MemberRole;
   roleColor: string;
+  avatarDecoration?: AvatarDecorationId;
+  clanTag?: string;
+  nameplate?: NameplateId;
+  activityText?: string;
   inviteCode?: string;
   joinedAt?: Timestamp;
   updatedAt?: Timestamp;
@@ -136,6 +203,8 @@ export interface ChannelDoc {
   category: string;
   topic: string;
   position: number;
+  slowmodeSeconds?: number;
+  nsfw?: boolean;
   createdAt?: Timestamp;
   updatedAt?: Timestamp;
 }
@@ -166,6 +235,7 @@ export interface ChatMessage {
   replyToAuthor: string;
   replyToContent: string;
   reactions: Record<string, string[]>;
+  poll?: ChatPoll;
   pinned?: boolean;
   edited: boolean;
   isBot?: boolean;

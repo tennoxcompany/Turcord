@@ -1,11 +1,13 @@
 import React, { useMemo } from 'react';
 import type { MemberRole, ServerMember, UserStatus } from '../types/halka';
 import { ROLE_COLORS, ROLE_LABELS } from '../lib/halkaService';
-import { Avatar } from './Avatar';
+import { getNameplateMeta } from '../lib/cosmetics';
+import { Avatar, ClanTagBadge } from './Avatar';
 
 interface MemberListProps {
   members: ServerMember[];
   currentUid: string;
+  currentUserStatus?: UserStatus;
   onlineUsers: Record<string, { status: string; displayName: string; avatarUrl: string }>;
   onSelectMemberUid: (uid: string) => void;
 }
@@ -13,10 +15,12 @@ interface MemberListProps {
 export const MemberList: React.FC<MemberListProps> = ({
   members,
   currentUid,
+  currentUserStatus = 'online',
   onlineUsers,
   onSelectMemberUid,
 }) => {
   const getStatus = (uid: string): UserStatus => {
+    if (uid === currentUid) return currentUserStatus;
     const entry = onlineUsers[uid];
     if (!entry) return 'offline';
     return (entry.status as UserStatus) || 'online';
@@ -33,7 +37,7 @@ export const MemberList: React.FC<MemberListProps> = ({
     const offline: ServerMember[] = [];
 
     for (const m of members) {
-      const st = m.uid === currentUid ? 'online' : getStatus(m.uid);
+      const st = getStatus(m.uid);
       if (st === 'offline') {
         offline.push(m);
       } else {
@@ -51,7 +55,7 @@ export const MemberList: React.FC<MemberListProps> = ({
       result.push({ label: `ÇEVRİMDIŞI — ${offline.length}`, items: offline, isOffline: true });
     }
     return result;
-  }, [members, onlineUsers, currentUid]);
+  }, [members, onlineUsers, currentUid, currentUserStatus]);
 
   return (
     <aside className="w-[240px] h-full min-h-0 shrink-0 bg-[var(--bg-sidebar)] border-l border-[var(--border-subtle)] overflow-y-auto px-2 py-4 space-y-5 select-none hidden md:block">
@@ -61,14 +65,15 @@ export const MemberList: React.FC<MemberListProps> = ({
             {grp.label}
           </h3>
           {grp.items.map((m) => {
-            const st = m.uid === currentUid ? 'online' : getStatus(m.uid);
+            const st = getStatus(m.uid);
+            const nameplate = getNameplateMeta(m.nameplate);
             return (
               <button
                 key={m.uid}
                 onClick={() => onSelectMemberUid(m.uid)}
                 className={`w-full flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-[var(--bg-hover)] transition-colors text-left cursor-pointer ${
-                  grp.isOffline ? 'opacity-55 hover:opacity-100' : ''
-                }`}
+                  nameplate.className
+                } ${grp.isOffline ? 'opacity-55 hover:opacity-100' : ''}`}
               >
                 <Avatar
                   src={m.avatarUrl}
@@ -77,15 +82,25 @@ export const MemberList: React.FC<MemberListProps> = ({
                   status={st}
                   showStatus
                   ringBg="var(--bg-sidebar)"
+                  decoration={m.avatarDecoration}
                 />
                 <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-1 min-w-0">
+                    <p
+                      style={{ color: m.roleColor || ROLE_COLORS[m.role] || '#DBDEE1' }}
+                      className="text-[14px] font-medium truncate leading-tight"
+                    >
+                      {m.displayName}
+                    </p>
+                    <ClanTagBadge tag={m.clanTag} />
+                  </div>
                   <p
-                    style={{ color: m.roleColor || ROLE_COLORS[m.role] || '#DBDEE1' }}
-                    className="text-[14px] font-medium truncate leading-tight"
+                    className={`text-[11px] truncate leading-tight ${
+                      m.activityText && !grp.isOffline ? 'text-[#23A55A]' : 'text-[var(--text-muted)]'
+                    }`}
                   >
-                    {m.displayName}
+                    {m.activityText && !grp.isOffline ? m.activityText : `@${m.username}`}
                   </p>
-                  <p className="text-[11px] text-[var(--text-muted)] truncate leading-tight">@{m.username}</p>
                 </div>
               </button>
             );

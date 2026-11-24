@@ -3,31 +3,45 @@ import {
   Bell,
   ChevronDown,
   ChevronRight,
+  ChevronUp,
+  Clock,
+  Gamepad2,
   Hash,
   Headphones,
   LogOut,
   Megaphone,
   Mic,
   MicOff,
+  Monitor,
   PhoneOff,
   Plus,
   Settings,
   Smile,
+  Trash2,
   UserPlus,
   Video,
   Volume2,
   VolumeX,
-  Monitor,
-  Trash2,
+  Zap,
 } from 'lucide-react';
 import type {
   ChannelDoc,
   MemberRole,
   PublicProfile,
   ServerDoc,
+  UserActivity,
+  UserStatus,
   VoiceParticipant,
 } from '../types/halka';
+import { ACTIVITY_LABELS, ACTIVITY_PRESETS } from '../lib/cosmetics';
 import { Avatar, ClanTagBadge } from './Avatar';
+
+const STATUS_OPTIONS: Array<{ id: UserStatus; label: string; color: string }> = [
+  { id: 'online', label: 'Çevrimiçi', color: '#23A55A' },
+  { id: 'idle', label: 'Boşta', color: '#F0B232' },
+  { id: 'dnd', label: 'Rahatsız Etmeyin', color: '#F23F43' },
+  { id: 'offline', label: 'Görünmez', color: '#80848E' },
+];
 
 interface ChannelSidebarProps {
   server: ServerDoc;
@@ -53,7 +67,9 @@ interface ChannelSidebarProps {
   onToggleScreenShare: () => void;
   onOpenInvite: () => void;
   onOpenCreateChannel: (defaultType?: 'text' | 'voice') => void;
-  onOpenServerSettings: (initialTab?: 'general' | 'members' | 'bots' | 'emojis') => void;
+  onOpenServerSettings: (initialTab?: 'general' | 'members' | 'bots' | 'emojis' | 'boost') => void;
+  onOpenBoost?: () => void;
+  onQuickStatusUpdate?: (updates: { status?: UserStatus; activity?: UserActivity }) => Promise<void>;
   onOpenUserSettings: () => void;
   onOpenProfile?: () => void;
   onOpenNotifications?: () => void;
@@ -86,6 +102,8 @@ export const ChannelSidebar: React.FC<ChannelSidebarProps> = ({
   onOpenInvite,
   onOpenCreateChannel,
   onOpenServerSettings,
+  onOpenBoost,
+  onQuickStatusUpdate,
   onOpenUserSettings,
   onOpenProfile,
   onOpenNotifications,
@@ -93,10 +111,13 @@ export const ChannelSidebar: React.FC<ChannelSidebarProps> = ({
   onDeleteChannel,
 }) => {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [statusMenuOpen, setStatusMenuOpen] = useState(false);
   const [collapsedCats, setCollapsedCats] = useState<Record<string, boolean>>({});
 
   const canManageChannels = myRole === 'owner' || myRole === 'admin' || myRole === 'moderator';
   const canManageServer = myRole === 'owner' || myRole === 'admin';
+  const boostCount = server.boostCount || 0;
+  const boostLevel = boostCount >= 6 ? 3 : boostCount >= 3 ? 2 : boostCount >= 1 ? 1 : 0;
 
   const grouped = useMemo(() => {
     const map = new Map<string, ChannelDoc[]>();
@@ -120,9 +141,20 @@ export const ChannelSidebar: React.FC<ChannelSidebarProps> = ({
           onClick={() => setMenuOpen((o) => !o)}
           className="w-full h-12 px-4 flex items-center justify-between border-b border-[var(--border-subtle)] hover:bg-[var(--bg-hover)] transition-colors cursor-pointer"
         >
-          <span className="font-display font-semibold text-[15px] text-white truncate">
-            {server.name}
-          </span>
+          <div className="flex items-center gap-1.5 min-w-0">
+            {boostLevel > 0 && (
+              <span
+                title={`Takviye Seviye ${boostLevel} (${boostCount} takviye)`}
+                className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-fuchsia-500/20 border border-fuchsia-400/40 text-[10px] font-bold text-fuchsia-300 shrink-0"
+              >
+                <Zap className="w-2.5 h-2.5" />
+                {boostCount}
+              </span>
+            )}
+            <span className="font-display font-semibold text-[15px] text-white truncate">
+              {server.name}
+            </span>
+          </div>
           <ChevronDown className={`w-4 h-4 text-[var(--text-secondary)] shrink-0 transition-transform ${menuOpen ? 'rotate-180' : ''}`} />
         </button>
 
@@ -139,6 +171,17 @@ export const ChannelSidebar: React.FC<ChannelSidebarProps> = ({
               >
                 <span>İnsanları Davet Et</span>
                 <UserPlus className="w-4 h-4" />
+              </button>
+              <button
+                onClick={() => {
+                  setMenuOpen(false);
+                  if (onOpenBoost) onOpenBoost();
+                  else onOpenServerSettings('boost');
+                }}
+                className="w-full flex items-center justify-between px-2.5 py-2 rounded-lg text-fuchsia-300 hover:bg-fuchsia-500 hover:text-white transition-colors cursor-pointer"
+              >
+                <span>Sunucu Takviyesi</span>
+                <Zap className="w-4 h-4" />
               </button>
               {canManageChannels && (
                 <button
@@ -253,6 +296,17 @@ export const ChannelSidebar: React.FC<ChannelSidebarProps> = ({
                             <Hash className="w-4 h-4 shrink-0 text-[var(--text-muted)]" />
                           )}
                           <span className="text-[14px] font-medium truncate">{ch.name}</span>
+                          {ch.nsfw && (
+                            <span className="px-1 py-0.2 rounded bg-rose-500/20 text-[9px] font-bold text-rose-300 shrink-0">
+                              +18
+                            </span>
+                          )}
+                          {(ch.slowmodeSeconds || 0) > 0 && (
+                            <Clock
+                              className="w-3 h-3 text-amber-400 shrink-0"
+                              aria-label={`Yavaş mod ${ch.slowmodeSeconds}s`}
+                            />
+                          )}
                         </button>
 
                         {canManageChannels && channels.length > 1 && (
@@ -350,32 +404,127 @@ export const ChannelSidebar: React.FC<ChannelSidebarProps> = ({
       )}
 
       {/* User Control Dock */}
-      <div className="h-[56px] px-2 bg-[var(--bg-rail)] border-t border-[var(--border-subtle)] flex items-center justify-between gap-1">
-        <button
-          onClick={() => (onOpenProfile ? onOpenProfile() : onOpenUserSettings())}
-          className="flex items-center gap-2 min-w-0 px-1.5 py-1 rounded-lg hover:bg-[var(--bg-hover)] transition-colors text-left cursor-pointer flex-1"
-        >
-          <Avatar
-            src={profile.avatarUrl}
-            name={profile.displayName}
-            size="sm"
-            status={profile.status}
-            showStatus
-            ringBg="var(--bg-rail)"
-            decoration={profile.avatarDecoration}
-          />
-          <div className="min-w-0">
-            <div className="flex items-center gap-1 min-w-0">
-              <p className="text-[13px] font-semibold text-white truncate leading-tight">
-                {profile.displayName}
-              </p>
-              <ClanTagBadge tag={profile.clanTag} />
+      <div className="relative h-[56px] px-2 bg-[var(--bg-rail)] border-t border-[var(--border-subtle)] flex items-center justify-between gap-1">
+        {statusMenuOpen && onQuickStatusUpdate && (
+          <>
+            <div className="fixed inset-0 z-20" onClick={() => setStatusMenuOpen(false)} />
+            <div className="absolute left-2 right-2 bottom-15 z-30 bg-[var(--bg-card)] border border-[var(--border-subtle)] rounded-2xl p-2.5 shadow-2xl space-y-2.5">
+              <div className="space-y-1">
+                <p className="px-1.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--text-muted)]">
+                  Çevrimiçi Durumu
+                </p>
+                <div className="grid grid-cols-2 gap-1">
+                  {STATUS_OPTIONS.map((st) => (
+                    <button
+                      key={st.id}
+                      type="button"
+                      onClick={() => {
+                        void onQuickStatusUpdate({ status: st.id });
+                        setStatusMenuOpen(false);
+                      }}
+                      className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-[11px] font-medium cursor-pointer ${
+                        profile.status === st.id
+                          ? 'bg-[#5865F2]/25 text-white border border-[#5865F2]'
+                          : 'bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:text-white'
+                      }`}
+                    >
+                      <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: st.color }} />
+                      <span className="truncate">{st.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-1 pt-1 border-t border-[var(--border-subtle)]">
+                <div className="flex items-center justify-between px-1.5">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-[var(--text-muted)] flex items-center gap-1">
+                    <Gamepad2 className="w-3 h-3 text-[#23A55A]" />
+                    Hızlı Etkinlik
+                  </p>
+                  {profile.activity?.name && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void onQuickStatusUpdate({ activity: { type: 'playing', name: '', details: '' } });
+                        setStatusMenuOpen(false);
+                      }}
+                      className="text-[10px] text-rose-400 hover:underline cursor-pointer"
+                    >
+                      Temizle
+                    </button>
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {ACTIVITY_PRESETS.slice(0, 6).map((act) => {
+                    const active = profile.activity?.name === act.name;
+                    return (
+                      <button
+                        key={act.name}
+                        type="button"
+                        onClick={() => {
+                          void onQuickStatusUpdate({ activity: act });
+                          setStatusMenuOpen(false);
+                        }}
+                        className={`px-2 py-1 rounded-lg text-[10px] font-medium cursor-pointer ${
+                          active
+                            ? 'bg-[#23A55A] text-white'
+                            : 'bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:text-white'
+                        }`}
+                      >
+                        {act.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
             </div>
-            <p className="text-[11px] text-[var(--text-muted)] truncate leading-tight">
-              {profile.customStatus || `@${profile.username}`}
-            </p>
-          </div>
-        </button>
+          </>
+        )}
+
+        <div className="flex items-center gap-1 min-w-0 flex-1">
+          <button
+            onClick={() => (onOpenProfile ? onOpenProfile() : onOpenUserSettings())}
+            className="flex items-center gap-2 min-w-0 px-1.5 py-1 rounded-lg hover:bg-[var(--bg-hover)] transition-colors text-left cursor-pointer flex-1"
+          >
+            <Avatar
+              src={profile.avatarUrl}
+              name={profile.displayName}
+              size="sm"
+              status={profile.status}
+              showStatus
+              ringBg="var(--bg-rail)"
+              decoration={profile.avatarDecoration}
+            />
+            <div className="min-w-0">
+              <div className="flex items-center gap-1 min-w-0">
+                <p className="text-[13px] font-semibold text-white truncate leading-tight">
+                  {profile.displayName}
+                </p>
+                <ClanTagBadge tag={profile.clanTag} />
+              </div>
+              <p className="text-[11px] text-[var(--text-muted)] truncate leading-tight">
+                {profile.statusEmoji ? `${profile.statusEmoji} ` : ''}
+                {profile.customStatus ||
+                  (profile.activity?.name
+                    ? `${ACTIVITY_LABELS[profile.activity.type]}: ${profile.activity.name}`
+                    : `@${profile.username}`)}
+              </p>
+            </div>
+          </button>
+
+          {onQuickStatusUpdate && (
+            <button
+              type="button"
+              onClick={() => setStatusMenuOpen((o) => !o)}
+              title="Hızlı Durum & Etkinlik"
+              className={`p-1 rounded hover:bg-[var(--bg-hover)] text-[var(--text-muted)] hover:text-white cursor-pointer shrink-0 ${
+                statusMenuOpen ? 'text-white bg-[var(--bg-hover)]' : ''
+              }`}
+            >
+              <ChevronUp className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
 
         <div className="flex items-center shrink-0">
           {onOpenNotifications && (

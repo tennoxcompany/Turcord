@@ -24,17 +24,22 @@ import {
   type ChannelDoc,
   type ChannelType,
   type ChatMessage,
+  type ChatPoll,
   type DmThreadDoc,
   type FriendRequestDoc,
   type InviteDoc,
   type MemberRole,
+  type NameplateId,
+  type ProfileEffectId,
   type PublicProfile,
   type ServerDoc,
   type ServerEmoji,
   type ServerMember,
+  type UserActivity,
   type UserConnection,
   type UserStatus,
 } from '../types/halka';
+import { ACTIVITY_LABELS } from './cosmetics';
 import { getBotThreadId, OFFICIAL_BOTS } from './turcordBots';
 
 export function makeId(prefix = ''): string {
@@ -134,7 +139,7 @@ export async function ensureUserProfile(user: User): Promise<PublicProfile> {
       0,
       LIMITS.DISPLAY_NAME_MAX
     );
-    const avatarUrl = (user.photoURL || '').slice(0, 1000);
+    const avatarUrl = (user.photoURL || '').slice(0, LIMITS.AVATAR_URL_MAX);
 
     const profilePayload = {
       uid: user.uid,
@@ -142,11 +147,19 @@ export async function ensureUserProfile(user: User): Promise<PublicProfile> {
       displayName,
       avatarUrl,
       bannerColor: '#5865F2',
+      bannerUrl: '',
       bio: '',
+      pronouns: '',
       status: 'online' as UserStatus,
+      statusEmoji: '',
       customStatus: '',
       clanTag: 'TR',
       avatarDecoration: 'none' as AvatarDecorationId,
+      profileEffect: 'none' as ProfileEffectId,
+      nameplate: 'none' as NameplateId,
+      badges: ['turcord-pioneer'],
+      unlockedCosmetics: [] as string[],
+      claimedQuests: [] as string[],
       orbsBalance: 1500,
       connections: [] as UserConnection[],
       theme: 'oniks' as AppearanceTheme,
@@ -193,12 +206,16 @@ export async function updateUserProfile(
     displayName: string;
     username: string;
     bio: string;
+    pronouns?: string;
     status: UserStatus;
+    statusEmoji?: string;
     customStatus: string;
     bannerColor: string;
+    bannerUrl?: string;
     avatarUrl: string;
     clanTag?: string;
     connections?: UserConnection[];
+    activity?: UserActivity;
   }
 ): Promise<void> {
   const path = `users/${uid}`;
@@ -216,21 +233,38 @@ export async function updateUserProfile(
     }
 
     const cleanDisplay = updates.displayName.trim().slice(0, LIMITS.DISPLAY_NAME_MAX) || cleanUsername;
+    const cleanAvatar = updates.avatarUrl.slice(0, LIMITS.AVATAR_URL_MAX);
     const payload: Record<string, unknown> = {
       username: cleanUsername,
       displayName: cleanDisplay,
       bio: updates.bio.slice(0, LIMITS.BIO_MAX),
       status: updates.status,
       customStatus: updates.customStatus.slice(0, LIMITS.CUSTOM_STATUS_MAX),
-      bannerColor: updates.bannerColor.slice(0, 20),
-      avatarUrl: updates.avatarUrl.slice(0, 1000),
+      bannerColor: updates.bannerColor.slice(0, LIMITS.BANNER_COLOR_MAX),
+      avatarUrl: cleanAvatar,
       updatedAt: serverTimestamp(),
     };
+    if (updates.bannerUrl !== undefined) {
+      payload.bannerUrl = updates.bannerUrl.slice(0, LIMITS.BANNER_URL_MAX);
+    }
+    if (updates.pronouns !== undefined) {
+      payload.pronouns = updates.pronouns.trim().slice(0, LIMITS.PRONOUNS_MAX);
+    }
+    if (updates.statusEmoji !== undefined) {
+      payload.statusEmoji = updates.statusEmoji.trim().slice(0, LIMITS.STATUS_EMOJI_MAX);
+    }
     if (updates.clanTag !== undefined) {
       payload.clanTag = updates.clanTag.trim().toUpperCase().slice(0, LIMITS.CLAN_TAG_MAX);
     }
     if (updates.connections !== undefined) {
       payload.connections = updates.connections.slice(0, 6);
+    }
+    if (updates.activity !== undefined) {
+      payload.activity = {
+        type: updates.activity.type,
+        name: updates.activity.name.trim().slice(0, 50),
+        details: (updates.activity.details || '').trim().slice(0, 60),
+      };
     }
 
     const batch = writeBatch(db);
@@ -242,7 +276,7 @@ export async function updateUserProfile(
         uid,
         username: cleanUsername,
         displayName: cleanDisplay,
-        avatarUrl: updates.avatarUrl.slice(0, 1000),
+        avatarUrl: cleanAvatar,
         updatedAt: serverTimestamp(),
       });
     } else {
@@ -250,7 +284,7 @@ export async function updateUserProfile(
         uid,
         username: cleanUsername,
         displayName: cleanDisplay,
-        avatarUrl: updates.avatarUrl.slice(0, 1000),
+        avatarUrl: cleanAvatar,
         updatedAt: serverTimestamp(),
       });
     }
@@ -267,9 +301,20 @@ export async function updateUserPreferences(
   uid: string,
   updates: Partial<{
     status: UserStatus;
+    statusEmoji: string;
     customStatus: string;
+    pronouns: string;
     clanTag: string;
+    avatarUrl: string;
+    bannerColor: string;
+    bannerUrl: string;
     avatarDecoration: AvatarDecorationId;
+    profileEffect: ProfileEffectId;
+    nameplate: NameplateId;
+    activity: UserActivity;
+    badges: string[];
+    unlockedCosmetics: string[];
+    claimedQuests: string[];
     orbsBalance: number;
     connections: UserConnection[];
     theme: AppearanceTheme;
@@ -288,6 +333,41 @@ export async function updateUserPreferences(
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, `users/${uid}`);
   }
+}
+
+export function formatActivityLine(activity?: UserActivity): string {
+  if (!activity?.name) return '';
+  return `${ACTIVITY_LABELS[activity.type] || 'Oynuyor'}: ${activity.name}`.slice(0, 80);
+}
+
+export async function syncUserVisualsToServers(
+  uid: string,
+  serverIds: string[],
+  visuals: Partial<{
+    displayName: string;
+    username: string;
+    avatarUrl: string;
+    avatarDecoration: AvatarDecorationId;
+    clanTag: string;
+    nameplate: NameplateId;
+    activityText: string;
+  }>
+): Promise<void> {
+  if (serverIds.length === 0) return;
+  const cleanPayload: Record<string, unknown> = { updatedAt: serverTimestamp() };
+  if (visuals.displayName !== undefined) cleanPayload.displayName = visuals.displayName.slice(0, LIMITS.DISPLAY_NAME_MAX);
+  if (visuals.username !== undefined) cleanPayload.username = visuals.username.slice(0, LIMITS.USERNAME_MAX);
+  if (visuals.avatarUrl !== undefined) cleanPayload.avatarUrl = visuals.avatarUrl.slice(0, LIMITS.AVATAR_URL_MAX);
+  if (visuals.avatarDecoration !== undefined) cleanPayload.avatarDecoration = visuals.avatarDecoration;
+  if (visuals.clanTag !== undefined) cleanPayload.clanTag = visuals.clanTag.slice(0, LIMITS.CLAN_TAG_MAX);
+  if (visuals.nameplate !== undefined) cleanPayload.nameplate = visuals.nameplate;
+  if (visuals.activityText !== undefined) cleanPayload.activityText = visuals.activityText.slice(0, 80);
+
+  await Promise.all(
+    serverIds.map((sid) =>
+      updateDoc(doc(db, 'servers', sid, 'members', uid), cleanPayload).catch(() => {})
+    )
+  );
 }
 
 export async function getUserNote(myUid: string, targetUid: string): Promise<string> {
@@ -357,7 +437,7 @@ export async function sendNotification(
       type: payload.type,
       fromUid: payload.fromUid,
       fromName: payload.fromName.slice(0, 40),
-      fromAvatar: (payload.fromAvatar || '').slice(0, 1000),
+      fromAvatar: (payload.fromAvatar || '').slice(0, LIMITS.AVATAR_URL_MAX),
       channelLabel: payload.channelLabel.slice(0, 80),
       preview: payload.preview.slice(0, 300),
       isRead: false,
@@ -409,6 +489,8 @@ export async function createServer(
       description: cleanDesc,
       iconEmoji: cleanEmoji,
       iconColor: cleanColor,
+      bannerColor: 'anim:anime-night',
+      boostCount: 0,
       ownerId: profile.uid,
       isPublic: input.isPublic,
       inviteCode,
@@ -424,9 +506,13 @@ export async function createServer(
       serverId,
       displayName: profile.displayName.slice(0, LIMITS.DISPLAY_NAME_MAX),
       username: profile.username.slice(0, LIMITS.USERNAME_MAX),
-      avatarUrl: (profile.avatarUrl || '').slice(0, 1000),
+      avatarUrl: (profile.avatarUrl || '').slice(0, LIMITS.AVATAR_URL_MAX),
       role: 'owner',
       roleColor: ROLE_COLORS.owner,
+      avatarDecoration: profile.avatarDecoration || 'none',
+      clanTag: (profile.clanTag || '').slice(0, LIMITS.CLAN_TAG_MAX),
+      nameplate: profile.nameplate || 'none',
+      activityText: formatActivityLine(profile.activity),
       joinedAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
@@ -562,9 +648,13 @@ export async function joinServer(
       serverId: server.id,
       displayName: profile.displayName.slice(0, LIMITS.DISPLAY_NAME_MAX),
       username: profile.username.slice(0, LIMITS.USERNAME_MAX),
-      avatarUrl: (profile.avatarUrl || '').slice(0, 1000),
+      avatarUrl: (profile.avatarUrl || '').slice(0, LIMITS.AVATAR_URL_MAX),
       role: assignedRole,
       roleColor: ROLE_COLORS[assignedRole],
+      avatarDecoration: profile.avatarDecoration || 'none',
+      clanTag: (profile.clanTag || '').slice(0, LIMITS.CLAN_TAG_MAX),
+      nameplate: profile.nameplate || 'none',
+      activityText: formatActivityLine(profile.activity),
       joinedAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     };
@@ -661,6 +751,7 @@ export async function updateServerSettings(
     description: string;
     iconEmoji: string;
     iconColor: string;
+    bannerColor?: string;
     isPublic: boolean;
     enabledBots?: string[];
   }
@@ -674,12 +765,44 @@ export async function updateServerSettings(
       isPublic: updates.isPublic,
       updatedAt: serverTimestamp(),
     };
+    if (updates.bannerColor !== undefined) {
+      payload.bannerColor = updates.bannerColor.slice(0, LIMITS.BANNER_COLOR_MAX);
+    }
     if (updates.enabledBots !== undefined) {
       payload.enabledBots = updates.enabledBots.slice(0, 10);
     }
     await updateDoc(doc(db, 'servers', serverId), payload);
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, `servers/${serverId}`);
+  }
+}
+
+export async function boostServerWithOrbs(
+  server: ServerDoc,
+  profile: PublicProfile,
+  cost = 500
+): Promise<void> {
+  const currentOrbs = profile.orbsBalance ?? 1500;
+  if (currentOrbs < cost) {
+    throw new Error(`Sunucuyu takviyelemek için ${cost} Orbs gerekli.`);
+  }
+  const nextBadges = Array.from(new Set([...(profile.badges || ['turcord-pioneer']), 'server-booster']));
+  const nextBoostCount = (server.boostCount || 0) + 1;
+
+  try {
+    const batch = writeBatch(db);
+    batch.update(doc(db, 'servers', server.id), {
+      boostCount: nextBoostCount,
+      updatedAt: serverTimestamp(),
+    });
+    batch.update(doc(db, 'users', profile.uid), {
+      orbsBalance: currentOrbs - cost,
+      badges: nextBadges,
+      updatedAt: serverTimestamp(),
+    });
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `servers/${server.id}`);
   }
 }
 
@@ -696,7 +819,15 @@ export async function deleteServer(uid: string, serverId: string): Promise<void>
 
 export async function createChannel(
   serverId: string,
-  input: { name: string; type: ChannelType; category: string; topic: string; position: number }
+  input: {
+    name: string;
+    type: ChannelType;
+    category: string;
+    topic: string;
+    position: number;
+    slowmodeSeconds?: number;
+    nsfw?: boolean;
+  }
 ): Promise<string> {
   const channelId = makeId('ch');
   try {
@@ -717,12 +848,38 @@ export async function createChannel(
       category: (input.category.trim() || 'METİN KANALLARI').toUpperCase().slice(0, 40),
       topic: input.topic.trim().slice(0, LIMITS.CHANNEL_TOPIC_MAX),
       position: input.position,
+      slowmodeSeconds: Math.max(0, Math.min(300, Math.round(input.slowmodeSeconds || 0))),
+      nsfw: Boolean(input.nsfw),
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
     return channelId;
   } catch (error) {
     handleFirestoreError(error, OperationType.CREATE, `servers/${serverId}/channels/${channelId}`);
+  }
+}
+
+export async function updateChannelSettings(
+  serverId: string,
+  channelId: string,
+  updates: Partial<{
+    name: string;
+    topic: string;
+    slowmodeSeconds: number;
+    nsfw: boolean;
+  }>
+): Promise<void> {
+  try {
+    const payload: Record<string, unknown> = { updatedAt: serverTimestamp() };
+    if (updates.name !== undefined) payload.name = updates.name.trim().slice(0, LIMITS.CHANNEL_NAME_MAX);
+    if (updates.topic !== undefined) payload.topic = updates.topic.trim().slice(0, LIMITS.CHANNEL_TOPIC_MAX);
+    if (updates.slowmodeSeconds !== undefined) {
+      payload.slowmodeSeconds = Math.max(0, Math.min(300, Math.round(updates.slowmodeSeconds)));
+    }
+    if (updates.nsfw !== undefined) payload.nsfw = Boolean(updates.nsfw);
+    await updateDoc(doc(db, 'servers', serverId, 'channels', channelId), payload);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `servers/${serverId}/channels/${channelId}`);
   }
 }
 
@@ -844,22 +1001,32 @@ export async function sendChannelMessage(
     attachmentUrl?: string;
     attachmentName?: string;
     replyTo?: ChatMessage | null;
+    poll?: ChatPoll;
   }
 ): Promise<void> {
   const messageId = makeId('msg');
-  const content = payload.content.trim().slice(0, LIMITS.MESSAGE_MAX);
+  const cleanPoll = payload.poll
+    ? {
+        question: payload.poll.question.trim().slice(0, 200),
+        options: payload.poll.options.map((o) => o.trim().slice(0, 80)).filter(Boolean).slice(0, 6),
+        multiSelect: Boolean(payload.poll.multiSelect),
+      }
+    : undefined;
+  const content = (
+    payload.content.trim() || (cleanPoll ? `📊 ${cleanPoll.question}` : '')
+  ).slice(0, LIMITS.MESSAGE_MAX);
   const attachmentUrl = (payload.attachmentUrl || '').slice(0, LIMITS.ATTACHMENT_MAX);
   const attachmentName = (payload.attachmentName || '').slice(0, 120);
   if (!content && !attachmentUrl) return;
 
   try {
-    await setDoc(doc(db, 'servers', serverId, 'channels', channelId, 'messages', messageId), {
+    const docData: Record<string, unknown> = {
       id: messageId,
       serverId,
       channelId,
       authorId: author.uid,
       authorName: author.displayName.slice(0, LIMITS.DISPLAY_NAME_MAX),
-      authorAvatar: (author.avatarUrl || '').slice(0, 1000),
+      authorAvatar: (author.avatarUrl || '').slice(0, LIMITS.AVATAR_URL_MAX),
       authorRoleColor: authorRoleColor || '#DBDEE1',
       content,
       attachmentUrl,
@@ -872,7 +1039,11 @@ export async function sendChannelMessage(
       edited: false,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
-    });
+    };
+    if (cleanPoll && cleanPoll.options.length >= 2) {
+      docData.poll = cleanPoll;
+    }
+    await setDoc(doc(db, 'servers', serverId, 'channels', channelId, 'messages', messageId), docData);
 
     if (payload.replyTo && payload.replyTo.authorId !== author.uid) {
       sendNotification(payload.replyTo.authorId, {
@@ -992,11 +1163,11 @@ export async function sendFriendRequestByUsername(
       fromUid: me.uid,
       fromName: me.displayName.slice(0, 40),
       fromUsername: me.username.slice(0, 32),
-      fromAvatar: (me.avatarUrl || '').slice(0, 1000),
+      fromAvatar: (me.avatarUrl || '').slice(0, LIMITS.AVATAR_URL_MAX),
       toUid: target.uid,
       toName: (target.displayName || cleanUsername).slice(0, 40),
       toUsername: target.username.slice(0, 32),
-      toAvatar: (target.avatarUrl || '').slice(0, 1000),
+      toAvatar: (target.avatarUrl || '').slice(0, LIMITS.AVATAR_URL_MAX),
       participants: [me.uid, target.uid],
       status: 'pending',
       createdAt: serverTimestamp(),
@@ -1024,11 +1195,11 @@ export async function sendFriendRequestByUid(me: PublicProfile, targetUid: strin
       fromUid: me.uid,
       fromName: me.displayName.slice(0, 40),
       fromUsername: me.username.slice(0, 32),
-      fromAvatar: (me.avatarUrl || '').slice(0, 1000),
+      fromAvatar: (me.avatarUrl || '').slice(0, LIMITS.AVATAR_URL_MAX),
       toUid: target.uid,
       toName: target.displayName.slice(0, 40),
       toUsername: target.username.slice(0, 32),
-      toAvatar: (target.avatarUrl || '').slice(0, 1000),
+      toAvatar: (target.avatarUrl || '').slice(0, LIMITS.AVATAR_URL_MAX),
       participants: [me.uid, target.uid],
       status: 'pending',
       createdAt: serverTimestamp(),
@@ -1076,12 +1247,12 @@ export async function getOrCreateDmThread(
         [me.uid]: {
           displayName: me.displayName.slice(0, 40),
           username: me.username.slice(0, 32),
-          avatarUrl: (me.avatarUrl || '').slice(0, 1000),
+          avatarUrl: (me.avatarUrl || '').slice(0, LIMITS.AVATAR_URL_MAX),
         },
         [other.uid]: {
           displayName: other.displayName.slice(0, 40),
           username: other.username.slice(0, 32),
-          avatarUrl: (other.avatarUrl || '').slice(0, 1000),
+          avatarUrl: (other.avatarUrl || '').slice(0, LIMITS.AVATAR_URL_MAX),
         },
       },
       isGroup: false,
@@ -1115,14 +1286,14 @@ export async function createGroupDmThread(
     [me.uid]: {
       displayName: me.displayName.slice(0, 40),
       username: me.username.slice(0, 32),
-      avatarUrl: (me.avatarUrl || '').slice(0, 1000),
+      avatarUrl: (me.avatarUrl || '').slice(0, LIMITS.AVATAR_URL_MAX),
     },
   };
   for (const o of others.slice(0, 9)) {
     participantProfiles[o.uid] = {
       displayName: o.displayName.slice(0, 40),
       username: o.username.slice(0, 32),
-      avatarUrl: (o.avatarUrl || '').slice(0, 1000),
+      avatarUrl: (o.avatarUrl || '').slice(0, LIMITS.AVATAR_URL_MAX),
     };
   }
   const cleanGroupName =
@@ -1161,22 +1332,32 @@ export async function sendDmMessage(
     attachmentUrl?: string;
     attachmentName?: string;
     replyTo?: ChatMessage | null;
+    poll?: ChatPoll;
   }
 ): Promise<void> {
   const messageId = makeId('dm');
-  const content = payload.content.trim().slice(0, LIMITS.MESSAGE_MAX);
+  const cleanPoll = payload.poll
+    ? {
+        question: payload.poll.question.trim().slice(0, 200),
+        options: payload.poll.options.map((o) => o.trim().slice(0, 80)).filter(Boolean).slice(0, 6),
+        multiSelect: Boolean(payload.poll.multiSelect),
+      }
+    : undefined;
+  const content = (
+    payload.content.trim() || (cleanPoll ? `📊 ${cleanPoll.question}` : '')
+  ).slice(0, LIMITS.MESSAGE_MAX);
   const attachmentUrl = (payload.attachmentUrl || '').slice(0, LIMITS.ATTACHMENT_MAX);
   const attachmentName = (payload.attachmentName || '').slice(0, 120);
   if (!content && !attachmentUrl) return;
 
   try {
     const batch = writeBatch(db);
-    batch.set(doc(db, 'dmThreads', threadId, 'messages', messageId), {
+    const msgData: Record<string, unknown> = {
       id: messageId,
       threadId,
       authorId: author.uid,
       authorName: author.displayName.slice(0, LIMITS.DISPLAY_NAME_MAX),
-      authorAvatar: (author.avatarUrl || '').slice(0, 1000),
+      authorAvatar: (author.avatarUrl || '').slice(0, LIMITS.AVATAR_URL_MAX),
       content,
       attachmentUrl,
       attachmentName,
@@ -1187,7 +1368,11 @@ export async function sendDmMessage(
       edited: false,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
-    });
+    };
+    if (cleanPoll && cleanPoll.options.length >= 2) {
+      msgData.poll = cleanPoll;
+    }
+    batch.set(doc(db, 'dmThreads', threadId, 'messages', messageId), msgData);
     batch.update(doc(db, 'dmThreads', threadId), {
       lastMessage: (content || attachmentName || 'Dosya gönderildi').slice(0, 200),
       lastMessageAt: serverTimestamp(),
@@ -1282,7 +1467,7 @@ export async function ensureTurcordBotThread(profile: PublicProfile): Promise<Dm
         [profile.uid]: {
           displayName: profile.displayName.slice(0, 40),
           username: profile.username.slice(0, 32),
-          avatarUrl: (profile.avatarUrl || '').slice(0, 1000),
+          avatarUrl: (profile.avatarUrl || '').slice(0, LIMITS.AVATAR_URL_MAX),
         },
         [bot.id]: {
           displayName: bot.name,
@@ -1374,6 +1559,52 @@ export async function sendBotAlertToUser(
     });
   } catch {
     // Non-blocking diagnostic alert
+  }
+}
+
+export async function voteOnPoll(
+  mode: 'channel' | 'dm',
+  parentId: string,
+  channelId: string | null,
+  message: ChatMessage,
+  optionIndex: number,
+  uid: string
+): Promise<void> {
+  if (!message.poll) return;
+  const key = `poll:${optionIndex}`;
+  const nextReactions: Record<string, string[]> = { ...(message.reactions || {}) };
+  const alreadyVotedThis = (nextReactions[key] || []).includes(uid);
+
+  if (!message.poll.multiSelect) {
+    for (const k of Object.keys(nextReactions)) {
+      if (k.startsWith('poll:')) {
+        const filtered = (nextReactions[k] || []).filter((id) => id !== uid);
+        if (filtered.length === 0) delete nextReactions[k];
+        else nextReactions[k] = filtered;
+      }
+    }
+  }
+
+  if (alreadyVotedThis) {
+    const filtered = (nextReactions[key] || []).filter((id) => id !== uid);
+    if (filtered.length === 0) delete nextReactions[key];
+    else nextReactions[key] = filtered;
+  } else {
+    nextReactions[key] = [...(nextReactions[key] || []), uid];
+  }
+
+  const ref =
+    mode === 'channel' && channelId
+      ? doc(db, 'servers', parentId, 'channels', channelId, 'messages', message.id)
+      : doc(db, 'dmThreads', parentId, 'messages', message.id);
+
+  try {
+    await updateDoc(ref, {
+      reactions: nextReactions,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, ref.path);
   }
 }
 

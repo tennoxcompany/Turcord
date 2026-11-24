@@ -16,6 +16,7 @@ import {
   acceptFriendRequest,
   addBookmark,
   addServerEmoji,
+  boostServerWithOrbs,
   createChannel,
   createGroupDmThread,
   createServer,
@@ -28,6 +29,7 @@ import {
   editDmMessage,
   ensureTurcordBotThread,
   ensureUserProfile,
+  formatActivityLine,
   getOrCreateDmThread,
   joinServer,
   joinServerByCode,
@@ -43,19 +45,25 @@ import {
   sendFriendRequestByUid,
   sendFriendRequestByUsername,
   setPendingRegistrationProfile,
+  syncUserVisualsToServers,
   toggleChannelReaction,
   toggleDmReaction,
   togglePinMessage,
+  updateChannelSettings,
   updateMemberRole,
   updateServerSettings,
+  updateUserPreferences,
   updateUserProfile,
+  voteOnPoll,
 } from './lib/halkaService';
 import { getBotThreadId, requestTurcordBotReply } from './lib/turcordBots';
 import { useRealtimeSocket } from './hooks/useRealtimeSocket';
 import type {
+  AvatarDecorationId,
   ChannelDoc,
   ChannelType,
   ChatMessage,
+  ChatPoll,
   DmThreadDoc,
   FriendRequestDoc,
   MemberRole,
@@ -63,9 +71,11 @@ import type {
   ServerDoc,
   ServerEmoji,
   ServerMember,
+  UserActivity,
   UserBookmark,
   UserMembership,
   UserNotification,
+  UserStatus,
 } from './types/halka';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { LoginScreen } from './components/LoginScreen';
@@ -121,7 +131,9 @@ function HalkaApp() {
   const [inviteOpen, setInviteOpen] = useState(false);
   const [createChannelType, setCreateChannelType] = useState<ChannelType | null>(null);
   const [serverSettingsOpen, setServerSettingsOpen] = useState(false);
-  const [serverSettingsInitialTab, setServerSettingsInitialTab] = useState<'general' | 'members' | 'bots' | 'emojis'>('general');
+  const [serverSettingsInitialTab, setServerSettingsInitialTab] = useState<
+    'general' | 'members' | 'bots' | 'emojis' | 'boost'
+  >('general');
   const [userSettingsOpen, setUserSettingsOpen] = useState(false);
   const [shopTab, setShopTab] = useState<'shop' | 'quests' | null>(null);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
@@ -403,6 +415,19 @@ function HalkaApp() {
     [members, selectedProfileUid]
   );
 
+  const memberDecorationsMap = useMemo(() => {
+    const map: Record<string, AvatarDecorationId> = {};
+    for (const m of members) {
+      if (m.avatarDecoration && m.avatarDecoration !== 'none') {
+        map[m.uid] = m.avatarDecoration;
+      }
+    }
+    if (profile?.uid && profile.avatarDecoration && profile.avatarDecoration !== 'none') {
+      map[profile.uid] = profile.avatarDecoration;
+    }
+    return map;
+  }, [members, profile?.uid, profile?.avatarDecoration]);
+
   const formatAuthError = (err: unknown, fallback: string) => {
     const msg = err instanceof Error ? err.message : String(err || '');
     if (msg.includes('auth/operation-not-allowed') || msg.includes('auth/admin-restricted-operation')) {
@@ -565,14 +590,27 @@ function HalkaApp() {
     setMobileNavOpen(false);
   };
 
+  const handleQuickStatusUpdate = async (updates: { status?: UserStatus; activity?: UserActivity }) => {
+    await updateUserPreferences(profile.uid, updates);
+    if (updates.activity !== undefined) {
+      await syncUserVisualsToServers(
+        profile.uid,
+        memberships.map((m) => m.serverId),
+        { activityText: formatActivityLine(updates.activity) }
+      );
+    }
+  };
+
   const handleSendDmMessage = async (payload: {
     content: string;
     attachmentUrl?: string;
     attachmentName?: string;
     replyTo?: ChatMessage | null;
+    poll?: ChatPoll;
   }) => {
     if (!activeDmThreadId) return;
     await sendDmMessage(activeDmThreadId, profile, payload);
+    if (payload.poll) return;
 
     if (activeDmThreadId !== getBotThreadId(profile.uid)) return;
     const trimmed = payload.content.trim();
@@ -631,6 +669,7 @@ function HalkaApp() {
     attachmentUrl?: string;
     attachmentName?: string;
     replyTo?: ChatMessage | null;
+    poll?: ChatPoll;
   }) => {
     if (!activeServer || !activeChannel) return;
 
@@ -642,6 +681,7 @@ function HalkaApp() {
       myMemberRecord?.roleColor || '#DBDEE1',
       payload
     );
+    if (payload.poll) return;
 
     const trimmed = payload.content.trim();
     if (!trimmed) return;
@@ -946,6 +986,11 @@ function HalkaApp() {
                 setServerSettingsInitialTab(tab || (canManageRoles ? 'general' : 'emojis'));
                 setServerSettingsOpen(true);
               }}
+              onOpenBoost={() => {
+                setServerSettingsInitialTab('boost');
+                setServerSettingsOpen(true);
+              }}
+              onQuickStatusUpdate={handleQuickStatusUpdate}
               onOpenUserSettings={() => setUserSettingsOpen(true)}
               onOpenProfile={() => setSelectedProfileUid(profile.uid)}
               onOpenNotifications={() => setNotificationsOpen(true)}
@@ -1003,6 +1048,9 @@ function HalkaApp() {
             onEditDmMessage={(msgId, content) => editDmMessage(activeDmThreadId!, msgId, content)}
             onDeleteDmMessage={(msgId) => deleteDmMessage(activeDmThreadId!, msgId)}
             onToggleDmReaction={(msg, em) => toggleDmReaction(activeDmThreadId!, msg, em, profile.uid)}
+            onVoteDmPoll={(msg, optionIdx) =>
+              voteOnPoll('dm', activeDmThreadId!, null, msg, optionIdx, profile.uid)
+            }
             onBookmarkMessage={(msg, label) => addBookmark(profile.uid, msg, label)}
             onTyping={rt.sendTyping}
             onStartDmCall={handleStartDmCall}
@@ -1027,6 +1075,7 @@ function HalkaApp() {
                     ? rt.roomParticipants
                     : rt.serverVoiceChannels[activeChannel.id] || []
                 }
+                memberDecorations={memberDecorationsMap}
                 localStream={rt.localStream}
                 remoteStreams={rt.remoteStreams}
                 muted={rt.muted}
@@ -1054,6 +1103,11 @@ function HalkaApp() {
                 subtitle={activeChannel.topic}
                 channelType={activeChannel.type}
                 channelKey={`server:${activeServer.id}:${activeChannel.id}`}
+                slowmodeSeconds={activeChannel.slowmodeSeconds}
+                nsfw={activeChannel.nsfw}
+                myRole={myRole}
+                members={members}
+                currentUserDecoration={profile.avatarDecoration}
                 messages={channelMessages}
                 currentUid={profile.uid}
                 canModerate={canModerate}
@@ -1086,6 +1140,9 @@ function HalkaApp() {
                 onToggleReaction={(msg, emoji) =>
                   toggleChannelReaction(activeServer.id, activeChannel.id, msg, emoji, profile.uid)
                 }
+                onVotePoll={(msg, optionIdx) =>
+                  voteOnPoll('channel', activeServer.id, activeChannel.id, msg, optionIdx, profile.uid)
+                }
                 onTogglePin={(msg) =>
                   togglePinMessage(activeServer.id, activeChannel.id, msg.id, !msg.pinned)
                 }
@@ -1100,6 +1157,7 @@ function HalkaApp() {
               <MemberList
                 members={members}
                 currentUid={profile.uid}
+                currentUserStatus={profile.status}
                 onlineUsers={rt.onlineUsers}
                 onSelectMemberUid={(uid) => setSelectedProfileUid(uid)}
               />
@@ -1196,6 +1254,7 @@ function HalkaApp() {
               : undefined
           }
           friendsCount={acceptedFriendsCount}
+          memberships={memberships}
           onClose={() => setSelectedProfileUid(null)}
           onEditOwnProfile={() => setUserSettingsOpen(true)}
           onOpenShop={() => setShopTab('shop')}
@@ -1211,6 +1270,7 @@ function HalkaApp() {
           initialTab={shopTab}
           serversCount={memberships.length}
           friendsCount={acceptedFriendsCount}
+          joinedServerIds={memberships.map((m) => m.serverId)}
           onClose={() => setShopTab(null)}
         />
       )}
@@ -1280,11 +1340,17 @@ function HalkaApp() {
         <ServerSettingsModal
           server={activeServer}
           members={members}
+          channels={channels}
           serverEmojis={serverEmojis}
           myRole={myRole}
+          userOrbs={profile.orbsBalance ?? 1500}
           initialTab={serverSettingsInitialTab}
           onClose={() => setServerSettingsOpen(false)}
           onSave={(updates) => updateServerSettings(activeServer.id, updates)}
+          onBoostServer={() => boostServerWithOrbs(activeServer, profile)}
+          onUpdateChannel={(channelId, updates) =>
+            updateChannelSettings(activeServer.id, channelId, updates)
+          }
           onChangeRole={(m, r) => updateMemberRole(activeServer.id, m, r)}
           onKick={(m) => kickMember(activeServer, m.uid)}
           onAddEmoji={async (input) => {
@@ -1309,7 +1375,20 @@ function HalkaApp() {
           onOpenNotifications={() => setNotificationsOpen(true)}
           onOpenBotDm={handleOpenBotDm}
           onRunDiagnostics={runBotDiagnostics}
-          onSave={(updates) => updateUserProfile(profile.uid, profile.username, updates)}
+          onSave={async (updates) => {
+            await updateUserProfile(profile.uid, profile.username, updates);
+            await syncUserVisualsToServers(
+              profile.uid,
+              memberships.map((m) => m.serverId),
+              {
+                displayName: updates.displayName,
+                username: updates.username,
+                avatarUrl: updates.avatarUrl,
+                clanTag: updates.clanTag,
+                activityText: formatActivityLine(updates.activity),
+              }
+            );
+          }}
           onSignOut={async () => {
             await rt.cleanupForSignOut();
             await signOut(auth);

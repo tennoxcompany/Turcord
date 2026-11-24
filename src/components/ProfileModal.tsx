@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from 'react';
 import {
-  Award,
   BadgeCheck,
   Calendar,
   ExternalLink,
@@ -15,10 +14,17 @@ import {
   UserPlus,
   X,
 } from 'lucide-react';
-import type { MemberRole, PublicProfile } from '../types/halka';
+import type { MemberRole, PublicProfile, UserMembership } from '../types/halka';
 import { getUserNote, getUserProfileByUid, ROLE_LABELS, saveUserNote } from '../lib/halkaService';
+import { DISCORD_BADGES, getDecorationMeta, getNameplateMeta } from '../lib/cosmetics';
 import { isOfficialBotUid, OFFICIAL_BOTS } from '../lib/turcordBots';
 import { Avatar, ClanTagBadge, VerifiedBotBadge } from './Avatar';
+import {
+  BadgesStrip,
+  ProfileBanner,
+  ProfileEffectOverlay,
+  RichActivityCard,
+} from './ProfileEffects';
 
 interface ProfileModalProps {
   targetUid: string;
@@ -37,6 +43,7 @@ interface ProfileModalProps {
     onKick: () => Promise<void>;
   };
   friendsCount?: number;
+  memberships?: UserMembership[];
   onClose: () => void;
   onEditOwnProfile: () => void;
   onOpenShop: () => void;
@@ -51,6 +58,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
   fallbackMember,
   moderation,
   friendsCount = 0,
+  memberships = [],
   onClose,
   onEditOwnProfile,
   onOpenShop,
@@ -166,13 +174,23 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
   const displayName = loadedProfile?.displayName || fallbackMember?.displayName || 'Kullanıcı';
   const username = loadedProfile?.username || fallbackMember?.username || 'user';
   const avatarUrl = loadedProfile?.avatarUrl ?? fallbackMember?.avatarUrl ?? '';
-  const bannerColor = loadedProfile?.bannerColor || '#E9D5FF';
+  const bannerColor = loadedProfile?.bannerColor || '#5865F2';
+  const bannerUrl = loadedProfile?.bannerUrl || '';
+  const pronouns = loadedProfile?.pronouns || '';
   const clanTag = loadedProfile?.clanTag || '';
   const bio = loadedProfile?.bio || '';
+  const statusEmoji = loadedProfile?.statusEmoji || '';
   const customStatus = loadedProfile?.customStatus || '';
   const orbs = loadedProfile?.orbsBalance ?? 1500;
   const connections = loadedProfile?.connections || [];
   const decoration = loadedProfile?.avatarDecoration || 'none';
+  const profileEffect = loadedProfile?.profileEffect || 'none';
+  const nameplate = loadedProfile?.nameplate || 'none';
+  const activity = loadedProfile?.activity;
+  const badges = loadedProfile?.badges || ['turcord-pioneer'];
+
+  const decoMeta = getDecorationMeta(decoration);
+  const nameplateMeta = getNameplateMeta(nameplate);
 
   const memberSince = loadedProfile?.createdAt?.toDate
     ? loadedProfile.createdAt.toDate().toLocaleDateString('tr-TR', {
@@ -195,23 +213,22 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-[440px] bg-[var(--bg-surface)] border border-[var(--border-subtle)] rounded-3xl overflow-hidden shadow-2xl max-h-[90vh] flex flex-col"
+        className="relative w-full max-w-[440px] bg-[var(--bg-surface)] border border-[var(--border-subtle)] rounded-3xl overflow-hidden shadow-2xl max-h-[90vh] flex flex-col"
       >
+        <ProfileEffectOverlay effect={profileEffect} />
+
         {/* Top Banner */}
-        <div
-          style={{ backgroundColor: bannerColor }}
-          className="h-28 relative shrink-0"
-        >
+        <ProfileBanner bannerColor={bannerColor} bannerUrl={bannerUrl} className="h-28">
           <button
             onClick={onClose}
-            className="absolute top-3 right-3 p-1.5 rounded-full bg-black/45 text-white hover:bg-black/70 cursor-pointer"
+            className="absolute top-3 right-3 z-30 p-1.5 rounded-full bg-black/50 text-white hover:bg-black/75 cursor-pointer"
           >
             <X className="w-4 h-4" />
           </button>
-        </div>
+        </ProfileBanner>
 
         {/* Scrollable Content */}
-        <div className="px-5 pb-6 overflow-y-auto flex-1">
+        <div className="px-5 pb-6 overflow-y-auto flex-1 relative z-10">
           {/* Avatar + Thought Bubble Row */}
           <div className="-mt-11 mb-3 flex items-end gap-3">
             <Avatar
@@ -223,26 +240,38 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
               ringBg="var(--bg-surface)"
               decoration={decoration}
             />
-            {(customStatus || isMe) && (
+            {(customStatus || statusEmoji || isMe) && (
               <button
                 type="button"
                 onClick={() => isMe && onEditOwnProfile()}
-                className="mb-1 px-3 py-1.5 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-subtle)] text-xs text-[var(--text-secondary)] flex items-center gap-1.5 max-w-[230px] truncate cursor-pointer hover:border-[#5865F2]"
+                className="mb-1 px-3 py-1.5 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-subtle)] text-xs text-[var(--text-secondary)] flex items-center gap-1.5 max-w-[240px] truncate cursor-pointer hover:border-[#5865F2]"
               >
-                {!customStatus && <Plus className="w-3.5 h-3.5 shrink-0 text-[var(--text-muted)]" />}
+                {statusEmoji && <span className="shrink-0">{statusEmoji}</span>}
+                {!customStatus && !statusEmoji && (
+                  <Plus className="w-3.5 h-3.5 shrink-0 text-[var(--text-muted)]" />
+                )}
                 <span className="truncate italic">
-                  {customStatus || 'Durum düşüncesi ekle...'}
+                  {customStatus || (statusEmoji ? 'Durum' : 'Durum düşüncesi ekle...')}
                 </span>
               </button>
             )}
           </div>
 
-          {/* Name, Username, Clan Tag & Badges */}
-          <div className="space-y-1.5 mb-4">
+          {/* Name, Username, Pronouns, Clan Tag & Badges */}
+          <div
+            className={`space-y-1.5 mb-4 ${
+              nameplate !== 'none' ? `p-2.5 rounded-2xl ${nameplateMeta.className}` : ''
+            }`}
+          >
             <div className="flex items-center gap-2 flex-wrap">
               <h2 className="font-display text-xl font-bold text-white leading-tight">
                 {displayName}
               </h2>
+              {pronouns && (
+                <span className="text-[11px] font-medium px-2 py-0.5 rounded-md bg-[var(--bg-card)] border border-[var(--border-subtle)] text-[var(--text-secondary)]">
+                  {pronouns}
+                </span>
+              )}
               {fallbackMember?.roleLabel && (
                 <span
                   style={{ color: fallbackMember.roleColor }}
@@ -256,11 +285,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-xs text-[var(--text-muted)]">@{username}</span>
               <ClanTagBadge tag={clanTag} />
-              <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[var(--bg-card)] border border-[var(--border-subtle)] text-[#5865F2]">
-                <Shield className="w-3 h-3 text-[#23A55A]" />
-                <Sparkles className="w-3 h-3 text-[#A855F7]" />
-                <Award className="w-3 h-3 text-[#F59E0B]" />
-              </div>
+              <BadgesStrip badges={badges} />
             </div>
           </div>
 
@@ -381,13 +406,16 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
                 </button>
               )}
 
+              {/* Live Rich Presence Activity */}
+              {activity?.name && <RichActivityCard activity={activity} />}
+
               {/* Bio & Member Since */}
               <div className="p-4 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-subtle)] space-y-3">
                 <div>
                   <p className="text-[11px] font-semibold text-[var(--text-muted)] uppercase mb-1">
-                    Biyografi
+                    Hakkında
                   </p>
-                  <p className="text-sm text-[var(--text-secondary)] leading-relaxed">
+                  <p className="text-sm text-[var(--text-secondary)] leading-relaxed whitespace-pre-wrap">
                     {bio || 'Henüz biyografi eklenmemiş.'}
                   </p>
                 </div>
@@ -428,8 +456,10 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
 
               {isMe && (
                 <div className="flex items-center justify-between p-3.5 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-subtle)]">
-                  <span className="text-sm font-medium text-white">Arkadaşlar</span>
-                  <span className="text-xs text-[var(--text-muted)] tabular-nums">{friendsCount} arkadaş</span>
+                  <span className="text-sm font-medium text-white">Arkadaşlar &amp; Sunucular</span>
+                  <span className="text-xs text-[var(--text-muted)] tabular-nums">
+                    {friendsCount} arkadaş · {memberships.length} sunucu
+                  </span>
                 </div>
               )}
 
@@ -456,36 +486,96 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
           )}
 
           {tab === 'activity' && (
-            <div className="p-6 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-subtle)] text-center space-y-2">
-              <Sparkles className="w-8 h-8 mx-auto text-[#5865F2]" />
-              <p className="text-sm font-medium text-white">
-                {customStatus || 'Şu an aktif bir oyun veya müzik etkinliği yok'}
-              </p>
-              <p className="text-xs text-[var(--text-muted)]">
-                Özel durum veya bağlantı ekleyerek etkinliğini burada paylaşabilirsin.
-              </p>
+            <div className="space-y-3">
+              {activity?.name ? (
+                <RichActivityCard activity={activity} />
+              ) : (
+                <div className="p-6 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-subtle)] text-center space-y-2">
+                  <Sparkles className="w-8 h-8 mx-auto text-[#5865F2]" />
+                  <p className="text-sm font-medium text-white">
+                    {customStatus || 'Şu an aktif bir oyun veya müzik etkinliği yok'}
+                  </p>
+                  <p className="text-xs text-[var(--text-muted)]">
+                    Profil ayarlarından oyun/müzik etkinliği ekleyebilirsin.
+                  </p>
+                </div>
+              )}
+              {isMe && (
+                <button
+                  onClick={() => {
+                    onClose();
+                    onEditOwnProfile();
+                  }}
+                  className="w-full py-2.5 rounded-xl bg-[var(--bg-card)] border border-[var(--border-subtle)] hover:border-[#5865F2] text-xs font-medium text-white cursor-pointer"
+                >
+                  Etkinlik Durumunu Düzenle
+                </button>
+              )}
             </div>
           )}
 
           {tab === 'wishlist' && (
-            <div className="p-4 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-subtle)] space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold text-[var(--text-muted)] uppercase">
-                  Aktif Avatar Çerçevesi
-                </span>
-                <span className="text-xs font-medium text-white">
-                  {decoration === 'none' ? 'Yok' : decoration}
-                </span>
+            <div className="space-y-3">
+              <div className="p-4 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-subtle)] space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-[var(--text-muted)] uppercase">
+                    Avatar Çerçevesi
+                  </span>
+                  <span className="text-xs font-medium text-white">
+                    {decoMeta ? decoMeta.name : 'Yok'}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-[var(--text-muted)] uppercase">
+                    Profil Efekti
+                  </span>
+                  <span className="text-xs font-medium text-white">
+                    {profileEffect === 'none' ? 'Yok' : profileEffect}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-[var(--text-muted)] uppercase">
+                    İsimlik
+                  </span>
+                  <span className="text-xs font-medium text-white">
+                    {nameplateMeta.name}
+                  </span>
+                </div>
               </div>
+
+              <div className="p-4 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-subtle)] space-y-2">
+                <p className="text-xs font-semibold text-[var(--text-muted)] uppercase">
+                  Kazanılan Rozetler
+                </p>
+                <div className="space-y-1.5">
+                  {badges.map((bid) => {
+                    const def = DISCORD_BADGES[bid];
+                    if (!def) return null;
+                    return (
+                      <div
+                        key={bid}
+                        className="flex items-center gap-2.5 px-3 py-2 rounded-xl bg-[var(--bg-surface)] border border-[var(--border-subtle)]"
+                      >
+                        <span className="text-base">{def.emoji}</span>
+                        <div className="min-w-0">
+                          <p className="text-xs font-semibold text-white">{def.label}</p>
+                          <p className="text-[11px] text-[var(--text-muted)] truncate">{def.desc}</p>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
               {isMe && (
                 <button
                   onClick={() => {
                     onClose();
                     onOpenShop();
                   }}
-                  className="w-full py-2 rounded-xl bg-[var(--bg-elevated)] hover:bg-[#5865F2] text-white text-xs font-medium transition-colors cursor-pointer"
+                  className="w-full py-2.5 rounded-xl bg-[#5865F2] hover:bg-[#4752C4] text-white text-xs font-medium transition-colors cursor-pointer"
                 >
-                  Mağazaya Git &amp; Çerçeve Seç
+                  Mağazaya Git &amp; Kozmetik Seç
                 </button>
               )}
             </div>

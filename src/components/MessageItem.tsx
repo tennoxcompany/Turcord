@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  BarChart2,
   Bookmark,
   Check,
   Copy,
@@ -13,7 +14,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import type { ChatMessage, ServerEmoji } from '../types/halka';
+import type { AvatarDecorationId, ChatMessage, ServerEmoji } from '../types/halka';
 import { isSafeMediaUrl } from '../lib/gifLibrary';
 import { isOfficialBotUid } from '../lib/turcordBots';
 import { Avatar, VerifiedBotBadge } from './Avatar';
@@ -28,10 +29,12 @@ interface MessageItemProps {
   canModerate: boolean;
   canPin: boolean;
   serverEmojis?: ServerEmoji[];
+  authorDecoration?: AvatarDecorationId;
   onReply: (msg: ChatMessage) => void;
   onEdit: (msgId: string, newContent: string) => Promise<void>;
   onDelete: (msgId: string) => Promise<void>;
   onToggleReaction: (msg: ChatMessage, emoji: string) => Promise<void>;
+  onVotePoll?: (msg: ChatMessage, optionIndex: number) => Promise<void>;
   onTogglePin?: (msg: ChatMessage) => Promise<void>;
   onBookmark?: (msg: ChatMessage) => Promise<void>;
   onAuthorClick?: (uid: string) => void;
@@ -88,15 +91,54 @@ async function downloadAttachment(url: string, filename?: string): Promise<void>
   }
 }
 
+const SpoilerText: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [revealed, setRevealed] = useState(false);
+  return (
+    <span
+      role="button"
+      tabIndex={0}
+      onClick={(e) => {
+        e.stopPropagation();
+        setRevealed((r) => !r);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          setRevealed((r) => !r);
+        }
+      }}
+      title={revealed ? 'Gizlemek için tıkla' : 'Spoilerı görmek için tıkla'}
+      className={`px-1 py-0.5 mx-0.5 rounded transition-colors cursor-pointer ${
+        revealed
+          ? 'bg-white/10 text-[#DBDEE1]'
+          : 'bg-[#1E1F22] text-transparent hover:bg-[#2B2D31] select-none'
+      }`}
+    >
+      {children}
+    </span>
+  );
+};
+
 function renderInlineFormatting(
   text: string,
   emojiMap: Map<string, ServerEmoji>,
   jumbo = false
 ): React.ReactNode[] {
-  const tokenRegex = /(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`|https?:\/\/[^\s]+|:[a-z0-9_]{2,24}:)/g;
+  const tokenRegex =
+    /(\|\|[^|]+\|\||~~[^~]+~~|\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`|https?:\/\/[^\s]+|:[a-z0-9_]{2,24}:)/g;
   const parts = text.split(tokenRegex);
   return parts.map((part, idx) => {
     if (!part) return null;
+    if (part.startsWith('||') && part.endsWith('||') && part.length > 4) {
+      return <SpoilerText key={idx}>{part.slice(2, -2)}</SpoilerText>;
+    }
+    if (part.startsWith('~~') && part.endsWith('~~') && part.length > 4) {
+      return (
+        <del key={idx} className="line-through text-[var(--text-muted)]">
+          {part.slice(2, -2)}
+        </del>
+      );
+    }
     if (part.startsWith(':') && part.endsWith(':') && part.length >= 4) {
       const code = part.slice(1, -1);
       const custom = emojiMap.get(code);
@@ -186,11 +228,32 @@ function renderMessageContent(content: string, emojiMap: Map<string, ServerEmoji
     }
     const lines = block.split('\n');
     return lines.map((line, lIdx) => {
+      if (line.startsWith('# ')) {
+        return (
+          <h3 key={`${bIdx}-${lIdx}`} className="font-display text-lg font-bold text-white leading-snug mt-0.5">
+            {renderInlineFormatting(line.slice(2), emojiMap, false)}
+          </h3>
+        );
+      }
+      if (line.startsWith('## ')) {
+        return (
+          <h4 key={`${bIdx}-${lIdx}`} className="font-display text-base font-bold text-white leading-snug mt-0.5">
+            {renderInlineFormatting(line.slice(3), emojiMap, false)}
+          </h4>
+        );
+      }
+      if (line.startsWith('### ')) {
+        return (
+          <h5 key={`${bIdx}-${lIdx}`} className="font-display text-[15px] font-semibold text-white leading-snug mt-0.5">
+            {renderInlineFormatting(line.slice(4), emojiMap, false)}
+          </h5>
+        );
+      }
       if (line.startsWith('> ')) {
         return (
           <div
             key={`${bIdx}-${lIdx}`}
-            className="my-0.5 pl-3 text-[#B5BAC1] bg-[#2B2D31]/50 rounded py-0.5"
+            className="my-0.5 pl-3 border-l-2 border-[#4E5058] text-[#B5BAC1] bg-[#2B2D31]/50 rounded-r py-0.5"
           >
             {renderInlineFormatting(line.slice(2), emojiMap, false)}
           </div>
@@ -213,10 +276,12 @@ export const MessageItem: React.FC<MessageItemProps> = ({
   canModerate,
   canPin,
   serverEmojis = [],
+  authorDecoration,
   onReply,
   onEdit,
   onDelete,
   onToggleReaction,
+  onVotePoll,
   onTogglePin,
   onBookmark,
   onAuthorClick,
@@ -235,7 +300,9 @@ export const MessageItem: React.FC<MessageItemProps> = ({
 
   const isAuthor = message.authorId === currentUid;
   const isBotMsg = Boolean(message.isBot) || isOfficialBotUid(message.authorId);
-  const reactionsEntries = Object.entries(message.reactions || {}).filter(([, uids]) => uids.length > 0);
+  const reactionsEntries = Object.entries(message.reactions || {}).filter(
+    ([emoji, uids]) => !emoji.startsWith('poll:') && uids.length > 0
+  );
   const emojiMap = React.useMemo(() => {
     const map = new Map<string, ServerEmoji>();
     for (const em of serverEmojis) {
@@ -375,6 +442,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
               name={message.authorName}
               size={compactMode ? 'sm' : 'md'}
               botId={isBotMsg ? message.authorId : undefined}
+              decoration={isBotMsg ? undefined : authorDecoration}
             />
           </button>
         ) : (
@@ -445,13 +513,83 @@ export const MessageItem: React.FC<MessageItemProps> = ({
               </div>
             </div>
           ) : (
-            <div className="text-[15px] text-[var(--text-primary)] leading-[1.45] break-words">
-              {renderMessageContent(message.content, emojiMap)}
-              {message.edited && (
-                <span className="ml-1.5 text-[10px] text-[var(--text-muted)] select-none">(düzenlendi)</span>
-              )}
-            </div>
+            !message.poll && (
+              <div className="text-[15px] text-[var(--text-primary)] leading-[1.45] break-words">
+                {renderMessageContent(message.content, emojiMap)}
+                {message.edited && (
+                  <span className="ml-1.5 text-[10px] text-[var(--text-muted)] select-none">(düzenlendi)</span>
+                )}
+              </div>
+            )
           )}
+
+          {/* Interactive Poll Card */}
+          {message.poll && (() => {
+            const poll = message.poll;
+            const totalVotes = poll.options.reduce(
+              (acc, _opt, i) => acc + (message.reactions?.[`poll:${i}`]?.length || 0),
+              0
+            );
+            return (
+              <div className="mt-1.5 max-w-md rounded-2xl bg-[var(--bg-card)] border border-[var(--border-subtle)] p-3.5 space-y-2.5 shadow-sm">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <BarChart2 className="w-4 h-4 text-[#5865F2] shrink-0" />
+                    <p className="font-display font-semibold text-sm text-white leading-snug">
+                      {poll.question}
+                    </p>
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  {poll.options.map((opt, idx) => {
+                    const voters = message.reactions?.[`poll:${idx}`] || [];
+                    const voted = voters.includes(currentUid);
+                    const pct = totalVotes > 0 ? Math.round((voters.length / totalVotes) * 100) : 0;
+                    return (
+                      <button
+                        key={idx}
+                        type="button"
+                        onClick={() => onVotePoll?.(message, idx)}
+                        className={`relative w-full overflow-hidden rounded-xl border px-3 py-2 text-left transition-colors cursor-pointer ${
+                          voted
+                            ? 'border-[#5865F2] bg-[#5865F2]/12'
+                            : 'border-[var(--border-subtle)] bg-[var(--bg-surface)] hover:border-[var(--text-muted)]'
+                        }`}
+                      >
+                        <div
+                          className={`absolute inset-y-0 left-0 transition-all duration-300 ${
+                            voted ? 'bg-[#5865F2]/30' : 'bg-white/6'
+                          }`}
+                          style={{ width: `${pct}%` }}
+                        />
+                        <div className="relative flex items-center justify-between gap-2 text-xs">
+                          <span className="flex items-center gap-2 font-medium text-white truncate">
+                            <span
+                              className={`w-4 h-4 rounded-full border flex items-center justify-center shrink-0 ${
+                                voted
+                                  ? 'bg-[#5865F2] border-[#5865F2] text-white'
+                                  : 'border-[var(--text-muted)]'
+                              }`}
+                            >
+                              {voted && <Check className="w-2.5 h-2.5" />}
+                            </span>
+                            <span className="truncate">{opt}</span>
+                          </span>
+                          <span className="shrink-0 text-[11px] font-semibold text-[var(--text-secondary)] tabular-nums">
+                            {voters.length} · %{pct}
+                          </span>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="flex items-center justify-between text-[11px] text-[var(--text-muted)] pt-0.5">
+                  <span>{totalVotes} toplam oy</span>
+                  <span>{poll.multiSelect ? 'Çoklu seçim açık' : 'Tek seçim'}</span>
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Attachment */}
           {safeAttachmentUrl && (

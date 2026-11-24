@@ -2,14 +2,18 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
   AtSign,
+  BarChart2,
   Bot,
+  Clock,
   Hash,
   ImagePlus,
   Megaphone,
   Phone,
   Pin,
+  Plus,
   Search,
   SendHorizontal,
+  ShieldAlert,
   Smile,
   Sparkles,
   Star,
@@ -17,7 +21,14 @@ import {
   Video,
   X,
 } from 'lucide-react';
-import type { ChatMessage, ServerEmoji } from '../types/halka';
+import type {
+  AvatarDecorationId,
+  ChatMessage,
+  ChatPoll,
+  MemberRole,
+  ServerEmoji,
+  ServerMember,
+} from '../types/halka';
 import {
   fetchRemoteGifs,
   filterBuiltinGifs,
@@ -45,6 +56,11 @@ interface ChatAreaProps {
   subtitle?: string;
   channelType?: 'text' | 'voice' | 'announcement';
   channelKey: string;
+  slowmodeSeconds?: number;
+  nsfw?: boolean;
+  myRole?: MemberRole;
+  members?: ServerMember[];
+  currentUserDecoration?: AvatarDecorationId;
   messages: ChatMessage[];
   currentUid: string;
   canModerate: boolean;
@@ -68,10 +84,12 @@ interface ChatAreaProps {
     attachmentUrl?: string;
     attachmentName?: string;
     replyTo?: ChatMessage | null;
+    poll?: ChatPoll;
   }) => Promise<void>;
   onEditMessage: (msgId: string, newContent: string) => Promise<void>;
   onDeleteMessage: (msgId: string) => Promise<void>;
   onToggleReaction: (msg: ChatMessage, emoji: string) => Promise<void>;
+  onVotePoll?: (msg: ChatMessage, optionIndex: number) => Promise<void>;
   onTogglePin?: (msg: ChatMessage) => Promise<void>;
   onBookmark?: (msg: ChatMessage) => Promise<void>;
   onAuthorClick?: (uid: string) => void;
@@ -127,6 +145,11 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   subtitle,
   channelType = 'text',
   channelKey,
+  slowmodeSeconds = 0,
+  nsfw = false,
+  myRole = 'member',
+  members = [],
+  currentUserDecoration,
   messages,
   currentUid,
   canModerate,
@@ -149,6 +172,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   onEditMessage,
   onDeleteMessage,
   onToggleReaction,
+  onVotePoll,
   onTogglePin,
   onBookmark,
   onAuthorClick,
@@ -175,11 +199,43 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [slashIndex, setSlashIndex] = useState(0);
   const [emojiAutoIndex, setEmojiAutoIndex] = useState(0);
 
+  // Poll Creator
+  const [pollOpen, setPollOpen] = useState(false);
+  const [pollQuestion, setPollQuestion] = useState('');
+  const [pollOptions, setPollOptions] = useState<string[]>(['', '']);
+  const [pollMulti, setPollMulti] = useState(false);
+
+  // Slowmode Cooldown
+  const [lastSentAtMs, setLastSentAtMs] = useState<number>(0);
+  const [cooldownLeft, setCooldownLeft] = useState<number>(0);
+
   const feedRef = useRef<HTMLDivElement | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const typingTimeoutRef = useRef<number | null>(null);
+
+  const slowmodeActive =
+    mode === 'channel' &&
+    slowmodeSeconds > 0 &&
+    myRole !== 'owner' &&
+    myRole !== 'admin' &&
+    myRole !== 'moderator';
+
+  useEffect(() => {
+    if (!slowmodeActive || lastSentAtMs === 0) {
+      setCooldownLeft(0);
+      return;
+    }
+    const update = () => {
+      const elapsed = Math.floor((Date.now() - lastSentAtMs) / 1000);
+      const rem = Math.max(0, slowmodeSeconds - elapsed);
+      setCooldownLeft(rem);
+    };
+    update();
+    const id = window.setInterval(update, 500);
+    return () => window.clearInterval(id);
+  }, [slowmodeActive, slowmodeSeconds, lastSentAtMs]);
 
   useEffect(() => {
     const el = feedRef.current;
@@ -195,7 +251,10 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     setPinsOpen(false);
     setEmojiOpen(false);
     setGifOpen(false);
+    setPollOpen(false);
     setUploadError(null);
+    setLastSentAtMs(0);
+    setCooldownLeft(0);
   }, [channelKey]);
 
   useEffect(() => {
@@ -210,6 +269,19 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       window.clearTimeout(timer);
     };
   }, [gifOpen, gifQuery, gifCategory]);
+
+  const memberDecorationMap = useMemo(() => {
+    const map = new Map<string, AvatarDecorationId>();
+    for (const m of members) {
+      if (m.avatarDecoration && m.avatarDecoration !== 'none') {
+        map.set(m.uid, m.avatarDecoration);
+      }
+    }
+    if (currentUserDecoration && currentUserDecoration !== 'none') {
+      map.set(currentUid, currentUserDecoration);
+    }
+    return map;
+  }, [members, currentUserDecoration, currentUid]);
 
   const filteredMessages = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -283,7 +355,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   };
 
   const handleSendGif = async (gif: GifItem) => {
-    if (sending) return;
+    if (sending || cooldownLeft > 0) return;
     setSending(true);
     setGifOpen(false);
     setUploadError(null);
@@ -297,6 +369,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       });
       setText('');
       setReplyTo(null);
+      if (slowmodeActive) setLastSentAtMs(Date.now());
     } finally {
       setSending(false);
     }
@@ -323,6 +396,34 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     await handleSendGif(item);
   };
 
+  const handleSendPoll = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (sending || cooldownLeft > 0) return;
+    const cleanQ = pollQuestion.trim();
+    const cleanOpts = pollOptions.map((o) => o.trim()).filter(Boolean);
+    if (!cleanQ || cleanOpts.length < 2) return;
+    setSending(true);
+    try {
+      await onSendMessage({
+        content: `📊 ${cleanQ}`,
+        poll: {
+          question: cleanQ,
+          options: cleanOpts.slice(0, 6),
+          multiSelect: pollMulti,
+        },
+        replyTo,
+      });
+      setPollOpen(false);
+      setPollQuestion('');
+      setPollOptions(['', '']);
+      setPollMulti(false);
+      setReplyTo(null);
+      if (slowmodeActive) setLastSentAtMs(Date.now());
+    } finally {
+      setSending(false);
+    }
+  };
+
   const handleInputChange = (val: string) => {
     setText(val);
     if (!showTypingIndicator) return;
@@ -339,7 +440,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if ((!text.trim() && !attachmentUrl) || sending) return;
+    if ((!text.trim() && !attachmentUrl) || sending || cooldownLeft > 0) return;
     setSending(true);
     setUploadError(null);
     onTyping(channelKey, false);
@@ -354,6 +455,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       setReplyTo(null);
       setAttachmentUrl('');
       setAttachmentName('');
+      if (slowmodeActive) setLastSentAtMs(Date.now());
     } finally {
       setSending(false);
     }
@@ -407,6 +509,21 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             {title}
           </h1>
           {isBotThread && <VerifiedBotBadge />}
+          {mode === 'channel' && nsfw && (
+            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-rose-500/20 border border-rose-500/40 text-[10px] font-bold text-rose-300 shrink-0">
+              <ShieldAlert className="w-3 h-3" />
+              +18
+            </span>
+          )}
+          {mode === 'channel' && slowmodeSeconds > 0 && (
+            <span
+              title={`Yavaş mod: Her ${slowmodeSeconds} saniyede bir mesaj`}
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-500/15 border border-amber-500/30 text-[10px] font-medium text-amber-300 shrink-0 tabular-nums"
+            >
+              <Clock className="w-3 h-3" />
+              {slowmodeSeconds}sn
+            </span>
+          )}
           {subtitle && (
             <>
               <span className="text-[var(--border-subtle)] hidden sm:inline" aria-hidden="true">|</span>
@@ -589,10 +706,12 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               canModerate={canModerate}
               canPin={canPin}
               serverEmojis={serverEmojis}
+              authorDecoration={memberDecorationMap.get(msg.authorId)}
               onReply={setReplyTo}
               onEdit={onEditMessage}
               onDelete={onDeleteMessage}
               onToggleReaction={onToggleReaction}
+              onVotePoll={onVotePoll}
               onTogglePin={onTogglePin}
               onBookmark={onBookmark}
               onAuthorClick={onAuthorClick}
@@ -785,7 +904,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               }
             }}
             placeholder={
-              isBotThread
+              cooldownLeft > 0
+                ? `Yavaş mod aktif — ${cooldownLeft} saniye bekle...`
+                : isBotThread
                 ? 'Turcord botuna bir soru yaz veya /durum komutunu dene...'
                 : mode === 'dm'
                 ? `${title} sohbetine mesaj gönder`
@@ -796,6 +917,112 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             maxLength={2000}
             className="flex-1 bg-transparent text-[15px] text-[var(--text-primary)] placeholder-[var(--text-muted)] outline-none min-w-0"
           />
+
+          {/* Poll Creator Button & Popover */}
+          {!isBotThread && (
+            <div className="relative shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  setPollOpen((o) => !o);
+                  setGifOpen(false);
+                  setEmojiOpen(false);
+                }}
+                title="Anket Oluştur"
+                className={`p-1.5 rounded-full transition-colors cursor-pointer ${
+                  pollOpen
+                    ? 'bg-[#5865F2] text-white'
+                    : 'text-[var(--text-secondary)] hover:text-white hover:bg-[var(--bg-hover)]'
+                }`}
+              >
+                <BarChart2 className="w-4 h-4" />
+              </button>
+              {pollOpen && (
+                <div className="fixed sm:absolute left-4 right-4 sm:left-auto sm:right-0 bottom-20 sm:bottom-11 sm:w-80 bg-[var(--bg-card)] border border-[var(--border-subtle)] rounded-2xl p-3.5 shadow-2xl z-40 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-white flex items-center gap-1.5">
+                      <BarChart2 className="w-4 h-4 text-[#5865F2]" />
+                      Anket Oluştur
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setPollOpen(false)}
+                      className="text-[var(--text-muted)] hover:text-white cursor-pointer"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                  <div className="space-y-2">
+                    <input
+                      type="text"
+                      value={pollQuestion}
+                      onChange={(e) => setPollQuestion(e.target.value)}
+                      placeholder="Soru sor..."
+                      maxLength={200}
+                      className="w-full px-3 py-2 rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] text-xs text-white placeholder-[var(--text-muted)] outline-none"
+                    />
+                    {pollOptions.map((opt, idx) => (
+                      <div key={idx} className="flex items-center gap-1.5">
+                        <input
+                          type="text"
+                          value={opt}
+                          onChange={(e) =>
+                            setPollOptions((prev) => prev.map((v, i) => (i === idx ? e.target.value : v)))
+                          }
+                          placeholder={`Seçenek ${idx + 1}`}
+                          maxLength={80}
+                          className="flex-1 px-3 py-1.5 rounded-lg bg-[var(--bg-input)] border border-[var(--border-subtle)] text-xs text-white placeholder-[var(--text-muted)] outline-none"
+                        />
+                        {pollOptions.length > 2 && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setPollOptions((prev) => prev.filter((_v, i) => i !== idx))
+                            }
+                            className="p-1 text-[var(--text-muted)] hover:text-rose-400 cursor-pointer"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                    {pollOptions.length < 6 && (
+                      <button
+                        type="button"
+                        onClick={() => setPollOptions((prev) => [...prev, ''])}
+                        className="inline-flex items-center gap-1 text-[11px] font-medium text-[#949CF7] hover:underline cursor-pointer"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        Seçenek Ekle
+                      </button>
+                    )}
+                    <label className="flex items-center gap-2 text-xs text-[var(--text-secondary)] pt-1 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={pollMulti}
+                        onChange={(e) => setPollMulti(e.target.checked)}
+                        className="accent-[#5865F2]"
+                      />
+                      <span>Birden fazla seçeneğe izin ver</span>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={(e) => void handleSendPoll(e)}
+                      disabled={
+                        sending ||
+                        cooldownLeft > 0 ||
+                        !pollQuestion.trim() ||
+                        pollOptions.filter((o) => o.trim()).length < 2
+                      }
+                      className="w-full py-2 rounded-xl bg-[#5865F2] hover:bg-[#4752C4] disabled:opacity-45 text-white text-xs font-medium cursor-pointer"
+                    >
+                      Anketi Paylaş
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* GIF Picker Button & Popover */}
           <div className="relative shrink-0">
@@ -1068,11 +1295,15 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
           <button
             type="submit"
-            disabled={(!text.trim() && !attachmentUrl) || sending}
-            title="Gönder"
-            className="p-1.5 rounded-lg bg-[#5865F2] hover:bg-[#4752C4] disabled:opacity-40 text-white transition-colors cursor-pointer shrink-0"
+            disabled={(!text.trim() && !attachmentUrl) || sending || cooldownLeft > 0}
+            title={cooldownLeft > 0 ? `Yavaş mod (${cooldownLeft}s)` : 'Gönder'}
+            className="p-1.5 rounded-lg bg-[#5865F2] hover:bg-[#4752C4] disabled:opacity-40 text-white transition-colors cursor-pointer shrink-0 inline-flex items-center gap-1"
           >
-            <SendHorizontal className="w-4 h-4" />
+            {cooldownLeft > 0 ? (
+              <span className="text-[11px] font-bold px-1 tabular-nums">{cooldownLeft}s</span>
+            ) : (
+              <SendHorizontal className="w-4 h-4" />
+            )}
           </button>
         </form>
 

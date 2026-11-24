@@ -4,13 +4,15 @@ import {
   Mic,
   MicOff,
   Monitor,
+  Music,
   PhoneOff,
   Video,
   VideoOff,
   Volume2,
   VolumeX,
 } from 'lucide-react';
-import type { VoiceParticipant } from '../types/halka';
+import type { AvatarDecorationId, VoiceParticipant } from '../types/halka';
+import { playSoundboardEffect, SOUNDBOARD_ITEMS } from '../lib/cosmetics';
 import { Avatar } from './Avatar';
 
 interface StreamVideoProps {
@@ -67,6 +69,7 @@ interface VoiceStageProps {
   isJoined: boolean;
   currentUid: string;
   participants: VoiceParticipant[];
+  memberDecorations?: Record<string, AvatarDecorationId>;
   localStream: MediaStream | null;
   remoteStreams: Record<string, MediaStream>;
   muted: boolean;
@@ -87,6 +90,7 @@ export const VoiceStage: React.FC<VoiceStageProps> = ({
   isJoined,
   currentUid,
   participants,
+  memberDecorations,
   localStream,
   remoteStreams,
   muted,
@@ -102,6 +106,8 @@ export const VoiceStage: React.FC<VoiceStageProps> = ({
   onToggleScreenShare,
 }) => {
   const [spotlightUid, setSpotlightUid] = useState<string | null>(null);
+  const [soundboardOpen, setSoundboardOpen] = useState(false);
+  const [playingSoundId, setPlayingSoundId] = useState<string | null>(null);
 
   const hasVideoTrack = (stream?: MediaStream | null) =>
     Boolean(stream && stream.getVideoTracks().some((t) => t.readyState === 'live'));
@@ -194,6 +200,7 @@ export const VoiceStage: React.FC<VoiceStageProps> = ({
                         size="xl"
                         speaking={p.speaking}
                         ringBg="var(--bg-card)"
+                        decoration={memberDecorations?.[p.uid]}
                       />
                     </div>
                   )}
@@ -230,7 +237,51 @@ export const VoiceStage: React.FC<VoiceStageProps> = ({
 
       {/* Voice Controls Bar */}
       {isJoined && (
-        <div className="pb-6 pt-2 flex items-center justify-center gap-3 shrink-0">
+        <div className="relative pb-6 pt-2 flex items-center justify-center gap-3 shrink-0">
+          {soundboardOpen && (
+            <div className="absolute bottom-20 left-1/2 -translate-x-1/2 w-[310px] bg-[var(--bg-card)] border border-[var(--border-subtle)] rounded-2xl p-3 shadow-2xl z-30 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-white flex items-center gap-1.5">
+                  <Music className="w-3.5 h-3.5 text-[#5865F2]" />
+                  Ses Tahtası (Soundboard)
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setSoundboardOpen(false)}
+                  className="text-[11px] text-[var(--text-muted)] hover:text-white cursor-pointer"
+                >
+                  Kapat
+                </button>
+              </div>
+              <div className="grid grid-cols-3 gap-1.5">
+                {SOUNDBOARD_ITEMS.map((item) => {
+                  const active = playingSoundId === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => {
+                        playSoundboardEffect(item.id);
+                        setPlayingSoundId(item.id);
+                        setTimeout(() => setPlayingSoundId((cur) => (cur === item.id ? null : cur)), 450);
+                      }}
+                      className={`flex flex-col items-center gap-1 py-2 px-1.5 rounded-xl border text-center transition-all cursor-pointer ${
+                        active
+                          ? 'bg-[#5865F2]/25 border-[#5865F2] scale-95'
+                          : 'bg-[var(--bg-surface)] border-[var(--border-subtle)] hover:border-white/25'
+                      }`}
+                    >
+                      <span className="text-lg">{item.emoji}</span>
+                      <span className="text-[10px] font-medium text-white truncate max-w-full">
+                        {item.label}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           <button
             onClick={onToggleMute}
             title={muted ? 'Mikrofonu Aç' : 'Mikrofonu Kapat'}
@@ -257,6 +308,18 @@ export const VoiceStage: React.FC<VoiceStageProps> = ({
             }`}
           >
             <Monitor className="w-5 h-5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => setSoundboardOpen((o) => !o)}
+            title="Ses Tahtası (Soundboard)"
+            className={`w-12 h-12 rounded-full flex items-center justify-center transition-colors cursor-pointer ${
+              soundboardOpen
+                ? 'bg-[#5865F2] text-white'
+                : 'bg-[var(--bg-card)] hover:bg-[var(--bg-hover)] text-white border border-[var(--border-subtle)]'
+            }`}
+          >
+            <Music className="w-5 h-5" />
           </button>
           <button
             onClick={onToggleDeafen}
