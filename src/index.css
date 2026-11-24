@@ -57,6 +57,20 @@
     background-color: var(--bg-surface);
     color: var(--text-primary);
     overflow: hidden;
+    -webkit-touch-callout: none;
+  }
+
+  img {
+    -webkit-touch-callout: none;
+    -webkit-user-drag: none;
+    user-select: none;
+  }
+
+  input,
+  textarea,
+  [contenteditable="true"] {
+    -webkit-touch-callout: default;
+    user-select: text;
   }
 
   h1, h2, h3, h4, .font-display {

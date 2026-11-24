@@ -23,8 +23,10 @@ import {
   Plus,
   Search,
   Shield,
+  Smile,
   Sparkles,
   Trash2,
+  Upload,
   User,
   Users,
   Volume2,
@@ -37,6 +39,7 @@ import type {
   MemberRole,
   PublicProfile,
   ServerDoc,
+  ServerEmoji,
   ServerMember,
   UserConnection,
   UserStatus,
@@ -523,10 +526,62 @@ export const CreateChannelModal: React.FC<CreateChannelModalProps> = ({
 };
 
 // 5. Server Settings Modal
+async function prepareCustomEmojiDataUrl(file: File): Promise<string> {
+  if (file.type === 'image/gif') {
+    const raw = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ''));
+      reader.onerror = () => reject(new Error('GIF dosyası okunamadı.'));
+      reader.readAsDataURL(file);
+    });
+    if (raw.length > 150000) {
+      throw new Error('Hareketli GIF emoji en fazla ~110 KB olabilir.');
+    }
+    return raw;
+  }
+
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const maxDim = 128;
+        const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+        const width = Math.max(1, Math.round(img.width * scale));
+        const height = Math.max(1, Math.round(img.height * scale));
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return reject(new Error('Görsel işlenemedi.'));
+        ctx.clearRect(0, 0, width, height);
+        ctx.drawImage(img, 0, 0, width, height);
+        let dataUrl = canvas.toDataURL('image/webp', 0.86);
+        if (!dataUrl.startsWith('data:image/webp')) {
+          dataUrl = canvas.toDataURL('image/png');
+        }
+        if (dataUrl.length > 150000) {
+          dataUrl = canvas.toDataURL('image/webp', 0.65);
+        }
+        if (dataUrl.length > 150000) {
+          return reject(new Error('Emoji görseli 150 KB sınırını aşıyor.'));
+        }
+        resolve(dataUrl);
+      };
+      img.onerror = () => reject(new Error('Geçerli bir görsel seçin.'));
+      img.src = String(reader.result || '');
+    };
+    reader.onerror = () => reject(new Error('Dosya okunamadı.'));
+    reader.readAsDataURL(file);
+  });
+}
+
 interface ServerSettingsModalProps {
   server: ServerDoc;
   members: ServerMember[];
+  serverEmojis: ServerEmoji[];
   myRole: MemberRole;
+  initialTab?: 'general' | 'members' | 'bots' | 'emojis';
   onClose: () => void;
   onSave: (updates: {
     name: string;
@@ -539,19 +594,28 @@ interface ServerSettingsModalProps {
   onChangeRole: (member: ServerMember, role: Exclude<MemberRole, 'owner'>) => Promise<void>;
   onKick: (member: ServerMember) => Promise<void>;
   onDeleteServer: () => Promise<void>;
+  onAddEmoji: (input: { name: string; imageUrl: string }) => Promise<void>;
+  onDeleteEmoji: (emojiId: string) => Promise<void>;
 }
 
 export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
   server,
   members,
+  serverEmojis,
   myRole,
+  initialTab,
   onClose,
   onSave,
   onChangeRole,
   onKick,
   onDeleteServer,
+  onAddEmoji,
+  onDeleteEmoji,
 }) => {
-  const [tab, setTab] = useState<'general' | 'members' | 'bots'>('general');
+  const canManageGeneral = myRole === 'owner' || myRole === 'admin';
+  const [tab, setTab] = useState<'general' | 'members' | 'bots' | 'emojis'>(
+    initialTab || (canManageGeneral ? 'general' : 'emojis')
+  );
   const [name, setName] = useState(server.name);
   const [description, setDescription] = useState(server.description);
   const [iconEmoji, setIconEmoji] = useState(server.iconEmoji);
@@ -563,6 +627,12 @@ export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
       : ['turcord_bot', 'mod_bot', 'music_bot']
   );
   const [saving, setSaving] = useState(false);
+
+  // Custom Emoji upload state
+  const [emojiName, setEmojiName] = useState('');
+  const [emojiImageUrl, setEmojiImageUrl] = useState('');
+  const [emojiError, setEmojiError] = useState<string | null>(null);
+  const [emojiSaving, setEmojiSaving] = useState(false);
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -590,39 +660,100 @@ export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
     });
   };
 
+  const handleEmojiFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setEmojiError(null);
+    try {
+      const url = await prepareCustomEmojiDataUrl(file);
+      setEmojiImageUrl(url);
+      if (!emojiName.trim()) {
+        const base = file.name
+          .replace(/\.[^.]+$/, '')
+          .toLowerCase()
+          .replace(/[^a-z0-9_]/g, '_')
+          .replace(/_+/g, '_')
+          .replace(/^_+|_+$/g, '')
+          .slice(0, 24);
+        if (base.length >= 2) setEmojiName(base);
+      }
+    } catch (err) {
+      setEmojiError(err instanceof Error ? err.message : 'Görsel yüklenemedi.');
+    } finally {
+      e.target.value = '';
+    }
+  };
+
+  const handleAddEmojiSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (emojiSaving) return;
+    setEmojiError(null);
+    setEmojiSaving(true);
+    try {
+      await onAddEmoji({ name: emojiName, imageUrl: emojiImageUrl });
+      setEmojiName('');
+      setEmojiImageUrl('');
+    } catch (err) {
+      setEmojiError(err instanceof Error ? err.message : 'Emoji eklenemedi.');
+    } finally {
+      setEmojiSaving(false);
+    }
+  };
+
+  const normalizedEmojiPreview = emojiName
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 24);
+
   return (
     <ModalShell title="Sunucu Ayarları" onClose={onClose} maxWidth="max-w-xl">
       <div className="space-y-5">
         <div className="flex items-center gap-2 border-b border-[var(--border-subtle)] pb-3 overflow-x-auto">
+          {canManageGeneral && (
+            <>
+              <button
+                onClick={() => setTab('general')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap cursor-pointer ${
+                  tab === 'general' ? 'bg-[#5865F2] text-white' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-card)]'
+                }`}
+              >
+                Genel Ayarlar
+              </button>
+              <button
+                onClick={() => setTab('members')}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap cursor-pointer ${
+                  tab === 'members' ? 'bg-[#5865F2] text-white' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-card)]'
+                }`}
+              >
+                <Users className="w-3.5 h-3.5" />
+                <span>Üyeler &amp; Roller ({members.length})</span>
+              </button>
+              <button
+                onClick={() => setTab('bots')}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap cursor-pointer ${
+                  tab === 'bots' ? 'bg-[#5865F2] text-white' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-card)]'
+                }`}
+              >
+                <Bot className="w-3.5 h-3.5" />
+                <span>Botlar &amp; Otomasyon</span>
+              </button>
+            </>
+          )}
           <button
-            onClick={() => setTab('general')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap cursor-pointer ${
-              tab === 'general' ? 'bg-[#5865F2] text-white' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-card)]'
-            }`}
-          >
-            Genel Ayarlar
-          </button>
-          <button
-            onClick={() => setTab('members')}
+            onClick={() => setTab('emojis')}
             className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap cursor-pointer ${
-              tab === 'members' ? 'bg-[#5865F2] text-white' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-card)]'
+              tab === 'emojis' ? 'bg-[#5865F2] text-white' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-card)]'
             }`}
           >
-            <Users className="w-3.5 h-3.5" />
-            <span>Üyeler &amp; Roller ({members.length})</span>
-          </button>
-          <button
-            onClick={() => setTab('bots')}
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap cursor-pointer ${
-              tab === 'bots' ? 'bg-[#5865F2] text-white' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-card)]'
-            }`}
-          >
-            <Bot className="w-3.5 h-3.5" />
-            <span>Botlar &amp; Otomasyon</span>
+            <Smile className="w-3.5 h-3.5" />
+            <span>Özel Emojiler ({serverEmojis.length})</span>
           </button>
         </div>
 
-        {tab === 'general' ? (
+        {tab === 'general' && canManageGeneral ? (
           <form onSubmit={handleSave} className="space-y-4">
             <div className="space-y-1.5">
               <label className="block text-xs font-semibold text-[var(--text-muted)] uppercase">Sunucu Adı</label>
@@ -757,7 +888,7 @@ export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
               </div>
             ))}
           </div>
-        ) : (
+        ) : tab === 'bots' && canManageGeneral ? (
           <div className="space-y-3">
             <p className="text-xs text-[var(--text-muted)]">
               Sunucunda aktif olacak resmi Turcord botlarını yönetebilirsin. Kanalda <code className="px-1 py-0.5 rounded bg-[var(--bg-card)] text-white">/</code> yazarak tüm komutlara erişilebilir.
@@ -805,6 +936,120 @@ export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
                 </div>
               );
             })}
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <p className="text-xs text-[var(--text-muted)] leading-relaxed">
+              Sunucuna PNG, WebP veya hareketli GIF formatında özel emojiler yükle. Üyeler emoji seçiciden veya sohbete{' '}
+              <code className="px-1 py-0.5 rounded bg-[var(--bg-card)] text-white">:emoji_adi:</code> yazarak kullanabilir.
+            </p>
+
+            <form
+              onSubmit={handleAddEmojiSubmit}
+              className="p-4 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-subtle)] space-y-3"
+            >
+              <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+                <label className="inline-flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl bg-[var(--bg-input)] hover:bg-[var(--bg-elevated)] border border-dashed border-[var(--border-subtle)] text-xs font-medium text-white cursor-pointer shrink-0">
+                  <Upload className="w-4 h-4 text-[#949CF7]" />
+                  <span>{emojiImageUrl ? 'Görseli Değiştir' : 'Görsel / GIF Seç'}</span>
+                  <input
+                    type="file"
+                    accept="image/png,image/webp,image/gif,image/jpeg"
+                    onChange={handleEmojiFileChange}
+                    className="hidden"
+                  />
+                </label>
+
+                <div className="flex-1 flex items-center gap-2 min-w-0">
+                  <input
+                    type="text"
+                    value={emojiName}
+                    onChange={(e) => setEmojiName(e.target.value)}
+                    placeholder="Kısa ad (örn: turcord_gg)"
+                    maxLength={24}
+                    className="w-full px-3 py-2 rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] text-xs text-white placeholder-[var(--text-muted)] outline-none"
+                  />
+                </div>
+              </div>
+
+              {emojiImageUrl && (
+                <div className="flex items-center justify-between gap-3 px-3 py-2 rounded-xl bg-[var(--bg-surface)] border border-[var(--border-subtle)]">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <img
+                      src={emojiImageUrl}
+                      alt={normalizedEmojiPreview || 'Önizleme'}
+                      className="w-9 h-9 object-contain rounded"
+                    />
+                    <div className="min-w-0">
+                      <p className="text-xs font-medium text-white truncate">
+                        :{normalizedEmojiPreview || 'emoji_adi'}:
+                      </p>
+                      <p className="text-[11px] text-[var(--text-muted)]">Sohbette ve tepkilerde görünüm</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setEmojiImageUrl('')}
+                    className="p-1 text-[var(--text-muted)] hover:text-rose-400 cursor-pointer"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
+
+              {emojiError && <p className="text-xs text-rose-400">{emojiError}</p>}
+
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[11px] text-[var(--text-muted)]">
+                  Kullanılan yuva: {serverEmojis.length} / 50
+                </span>
+                <button
+                  type="submit"
+                  disabled={!emojiImageUrl || normalizedEmojiPreview.length < 2 || emojiSaving}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#5865F2] hover:bg-[#4752C4] disabled:opacity-45 text-white text-xs font-medium cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>{emojiSaving ? 'Ekleniyor...' : 'Emoji Ekle'}</span>
+                </button>
+              </div>
+            </form>
+
+            {serverEmojis.length === 0 ? (
+              <div className="py-8 text-center text-xs text-[var(--text-muted)]">
+                Bu sunucuda henüz özel emoji yok. İlk özel emojini yukarıdan yükleyebilirsin!
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {serverEmojis.map((em) => (
+                  <div
+                    key={em.id}
+                    className="flex items-center justify-between gap-2.5 p-2.5 rounded-xl bg-[var(--bg-card)] border border-[var(--border-subtle)]"
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <img
+                        src={em.imageUrl}
+                        alt={`:${em.name}:`}
+                        className="w-8 h-8 object-contain rounded shrink-0 bg-[var(--bg-surface)] p-0.5"
+                      />
+                      <div className="min-w-0">
+                        <p className="text-xs font-mono font-semibold text-white truncate">:{em.name}:</p>
+                        <p className="text-[11px] text-[var(--text-muted)] truncate">
+                          Ekleyen: {em.creatorName}
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => onDeleteEmoji(em.id)}
+                      title="Emojiyi Sil"
+                      className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 cursor-pointer shrink-0"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>

@@ -1,11 +1,21 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
+import {
+  createUserWithEmailAndPassword,
+  onAuthStateChanged,
+  sendEmailVerification,
+  sendPasswordResetEmail,
+  signInWithEmailAndPassword,
+  signInWithPopup,
+  signOut,
+  updateProfile,
+} from 'firebase/auth';
 import { collection, doc, limit, onSnapshot, orderBy, query, where } from 'firebase/firestore';
 import { Menu, Phone, PhoneOff, Plus, Compass, X } from 'lucide-react';
 import { auth, db, googleProvider, handleFirestoreError, OperationType } from './lib/firebase';
 import {
   acceptFriendRequest,
   addBookmark,
+  addServerEmoji,
   createChannel,
   createGroupDmThread,
   createServer,
@@ -13,6 +23,7 @@ import {
   deleteChannelMessage,
   deleteDmMessage,
   deleteServer,
+  deleteServerEmoji,
   editChannelMessage,
   editDmMessage,
   ensureTurcordBotThread,
@@ -31,6 +42,7 @@ import {
   sendDmMessage,
   sendFriendRequestByUid,
   sendFriendRequestByUsername,
+  setPendingRegistrationProfile,
   toggleChannelReaction,
   toggleDmReaction,
   togglePinMessage,
@@ -49,6 +61,7 @@ import type {
   MemberRole,
   PublicProfile,
   ServerDoc,
+  ServerEmoji,
   ServerMember,
   UserBookmark,
   UserMembership,
@@ -94,6 +107,7 @@ function HalkaApp() {
   const [activeServer, setActiveServer] = useState<ServerDoc | null>(null);
   const [channels, setChannels] = useState<ChannelDoc[]>([]);
   const [members, setMembers] = useState<ServerMember[]>([]);
+  const [serverEmojis, setServerEmojis] = useState<ServerEmoji[]>([]);
   const [channelMessages, setChannelMessages] = useState<ChatMessage[]>([]);
   const [friendRequests, setFriendRequests] = useState<FriendRequestDoc[]>([]);
   const [dmThreads, setDmThreads] = useState<DmThreadDoc[]>([]);
@@ -107,6 +121,7 @@ function HalkaApp() {
   const [inviteOpen, setInviteOpen] = useState(false);
   const [createChannelType, setCreateChannelType] = useState<ChannelType | null>(null);
   const [serverSettingsOpen, setServerSettingsOpen] = useState(false);
+  const [serverSettingsInitialTab, setServerSettingsInitialTab] = useState<'general' | 'members' | 'bots' | 'emojis'>('general');
   const [userSettingsOpen, setUserSettingsOpen] = useState(false);
   const [shopTab, setShopTab] = useState<'shop' | 'quests' | null>(null);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
@@ -262,12 +277,13 @@ function HalkaApp() {
     };
   }, [profile?.uid]);
 
-  // 4. Active Server, Channels & Members Listeners
+  // 4. Active Server, Channels, Members & Custom Emojis Listeners
   useEffect(() => {
     if (activeView !== 'server' || !activeServerId || !profile?.uid) {
       setActiveServer(null);
       setChannels([]);
       setMembers([]);
+      setServerEmojis([]);
       return;
     }
 
@@ -307,10 +323,19 @@ function HalkaApp() {
       (err) => handleFirestoreError(err, OperationType.LIST, `servers/${activeServerId}/members`)
     );
 
+    const unsubEmojis = onSnapshot(
+      query(collection(db, 'servers', activeServerId, 'emojis'), orderBy('createdAt', 'desc')),
+      (snap) => {
+        setServerEmojis(snap.docs.map((d) => d.data() as ServerEmoji));
+      },
+      (err) => handleFirestoreError(err, OperationType.LIST, `servers/${activeServerId}/emojis`)
+    );
+
     return () => {
       unsubServer();
       unsubChannels();
       unsubMembers();
+      unsubEmojis();
     };
   }, [activeView, activeServerId, profile?.uid]);
 
@@ -378,18 +403,84 @@ function HalkaApp() {
     [members, selectedProfileUid]
   );
 
+  const formatAuthError = (err: unknown, fallback: string) => {
+    const msg = err instanceof Error ? err.message : String(err || '');
+    if (msg.includes('auth/operation-not-allowed') || msg.includes('auth/admin-restricted-operation')) {
+      return 'E-posta/Şifre girişi Firebase Console üzerinde henüz etkin değil. Firebase Console → Authentication → Sign-in method bölümünden "Email/Password" sağlayıcısını açabilir veya aşağıdan Google ile devam edebilirsin.';
+    }
+    if (msg.includes('auth/invalid-credential') || msg.includes('auth/wrong-password') || msg.includes('auth/user-not-found')) {
+      return 'E-posta adresi veya şifre hatalı.';
+    }
+    if (msg.includes('auth/email-already-in-use')) {
+      return 'Bu e-posta adresi zaten kayıtlı. Giriş Yap ekranını kullanabilirsin.';
+    }
+    if (msg.includes('auth/weak-password')) {
+      return 'Şifre çok zayıf. Lütfen en az 6 karakterli daha güçlü bir şifre seç.';
+    }
+    if (msg.includes('auth/invalid-email')) {
+      return 'Geçerli bir e-posta adresi gir.';
+    }
+    if (msg.includes('auth/too-many-requests')) {
+      return 'Çok fazla deneme yapıldı. Lütfen biraz bekleyip tekrar dene.';
+    }
+    if (msg.includes('auth/popup-closed-by-user')) {
+      return 'Google giriş penceresi kapatıldı.';
+    }
+    return err instanceof Error ? err.message : fallback;
+  };
+
   const handleGoogleLogin = async () => {
     setAuthError(null);
     try {
       await signInWithPopup(auth, googleProvider);
     } catch (err) {
-      setAuthError(err instanceof Error ? err.message : 'Google ile giriş yapılamadı.');
+      setAuthError(formatAuthError(err, 'Google ile giriş yapılamadı.'));
+    }
+  };
+
+  const handleEmailLogin = async (email: string, password: string) => {
+    setAuthError(null);
+    try {
+      await signInWithEmailAndPassword(auth, email, password);
+    } catch (err) {
+      setAuthError(formatAuthError(err, 'E-posta ile giriş yapılamadı.'));
+    }
+  };
+
+  const handleEmailRegister = async (input: {
+    email: string;
+    password: string;
+    displayName: string;
+    username: string;
+  }) => {
+    setAuthError(null);
+    setPendingRegistrationProfile({
+      displayName: input.displayName,
+      username: input.username,
+    });
+    try {
+      const cred = await createUserWithEmailAndPassword(auth, input.email, input.password);
+      void updateProfile(cred.user, { displayName: input.displayName }).catch(() => {});
+      void sendEmailVerification(cred.user).catch(() => {});
+    } catch (err) {
+      setPendingRegistrationProfile(null);
+      setAuthError(formatAuthError(err, 'Hesap oluşturulamadı.'));
+    }
+  };
+
+  const handleResetPassword = async (email: string) => {
+    setAuthError(null);
+    try {
+      await sendPasswordResetEmail(auth, email);
+    } catch (err) {
+      setAuthError(formatAuthError(err, 'Şifre sıfırlama bağlantısı gönderilemedi.'));
+      throw err;
     }
   };
 
   if (!authReady) {
     return (
-      <div className="min-h-screen bg-[var(--bg-rail)] text-[var(--text-muted)] flex items-center justify-center">
+      <div className="h-dvh bg-[var(--bg-rail)] text-[var(--text-muted)] flex items-center justify-center">
         <div className="text-center space-y-3">
           <div className="w-10 h-10 mx-auto rounded-xl bg-[#5865F2] animate-pulse" />
           <p className="text-sm font-medium">Turcord başlatılıyor...</p>
@@ -399,7 +490,16 @@ function HalkaApp() {
   }
 
   if (!profile) {
-    return <LoginScreen onGoogleLogin={handleGoogleLogin} error={authError} />;
+    return (
+      <LoginScreen
+        onGoogleLogin={handleGoogleLogin}
+        onEmailLogin={handleEmailLogin}
+        onEmailRegister={handleEmailRegister}
+        onResetPassword={handleResetPassword}
+        error={authError}
+        onClearError={() => setAuthError(null)}
+      />
+    );
   }
 
   const handleSelectServer = (serverId: string) => {
@@ -749,7 +849,20 @@ function HalkaApp() {
   };
 
   return (
-    <div className="h-screen w-screen overflow-hidden bg-[var(--bg-rail)] text-[var(--text-primary)] flex flex-col">
+    <div
+      onContextMenu={(e) => {
+        const target = e.target as HTMLElement | null;
+        if (
+          target instanceof HTMLInputElement ||
+          target instanceof HTMLTextAreaElement ||
+          target?.isContentEditable
+        ) {
+          return;
+        }
+        e.preventDefault();
+      }}
+      className="h-dvh w-screen overflow-hidden bg-[var(--bg-rail)] text-[var(--text-primary)] flex flex-col select-none"
+    >
       {/* Mobile Top Drawer Toggle */}
       <div className="md:hidden h-11 px-3 bg-[var(--bg-rail)] border-b border-[var(--border-subtle)] flex items-center justify-between shrink-0">
         <button
@@ -778,12 +891,12 @@ function HalkaApp() {
       </div>
 
       {/* Main 4-Column Discord Layout */}
-      <div className="flex-1 flex min-h-0 relative">
+      <div className="flex-1 flex min-h-0 overflow-hidden relative">
         {/* Left Navigation Wrapper (Always visible on md+, slide-over on mobile) */}
         <div
           className={`${
-            mobileNavOpen ? 'fixed inset-y-0 left-0 z-40 flex' : 'hidden'
-          } md:static md:flex shrink-0`}
+            mobileNavOpen ? 'fixed inset-y-0 left-0 z-40 flex min-h-0' : 'hidden'
+          } md:static md:flex md:h-full md:min-h-0 shrink-0`}
         >
           <ServerRail
             memberships={memberships}
@@ -829,7 +942,10 @@ function HalkaApp() {
               onToggleScreenShare={rt.toggleScreenShare}
               onOpenInvite={() => setInviteOpen(true)}
               onOpenCreateChannel={(defType) => setCreateChannelType(defType || 'text')}
-              onOpenServerSettings={() => setServerSettingsOpen(true)}
+              onOpenServerSettings={(tab) => {
+                setServerSettingsInitialTab(tab || (canManageRoles ? 'general' : 'emojis'));
+                setServerSettingsOpen(true);
+              }}
               onOpenUserSettings={() => setUserSettingsOpen(true)}
               onOpenProfile={() => setSelectedProfileUid(profile.uid)}
               onOpenNotifications={() => setNotificationsOpen(true)}
@@ -942,12 +1058,21 @@ function HalkaApp() {
                 currentUid={profile.uid}
                 canModerate={canModerate}
                 canPin={canModerate}
+                serverEmojis={serverEmojis}
                 compactMode={Boolean(profile.compactMode)}
                 enableSlashCommands
                 enabledBots={activeServer.enabledBots || ['turcord_bot', 'mod_bot', 'music_bot']}
                 botThinking={botThinking}
                 showMemberList={showMemberList}
                 showTypingIndicator={profile.showTypingIndicator ?? true}
+                onOpenEmojiSettings={
+                  canModerate
+                    ? () => {
+                        setServerSettingsInitialTab('emojis');
+                        setServerSettingsOpen(true);
+                      }
+                    : undefined
+                }
                 onToggleMemberList={() => setShowMemberList((s) => !s)}
                 typingUsers={rt.typingUsers}
                 onTyping={rt.sendTyping}
@@ -1155,11 +1280,17 @@ function HalkaApp() {
         <ServerSettingsModal
           server={activeServer}
           members={members}
+          serverEmojis={serverEmojis}
           myRole={myRole}
+          initialTab={serverSettingsInitialTab}
           onClose={() => setServerSettingsOpen(false)}
           onSave={(updates) => updateServerSettings(activeServer.id, updates)}
           onChangeRole={(m, r) => updateMemberRole(activeServer.id, m, r)}
           onKick={(m) => kickMember(activeServer, m.uid)}
+          onAddEmoji={async (input) => {
+            await addServerEmoji(activeServer.id, profile, input);
+          }}
+          onDeleteEmoji={(emojiId) => deleteServerEmoji(activeServer.id, emojiId)}
           onDeleteServer={async () => {
             await deleteServer(profile.uid, activeServer.id);
             setActiveView('home');

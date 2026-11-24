@@ -12,16 +12,32 @@ import {
   SendHorizontal,
   Smile,
   Sparkles,
+  Star,
   Users,
   Video,
   X,
 } from 'lucide-react';
-import type { ChatMessage } from '../types/halka';
+import type { ChatMessage, ServerEmoji } from '../types/halka';
+import {
+  fetchRemoteGifs,
+  filterBuiltinGifs,
+  getFavoriteGifs,
+  GIF_CATEGORIES,
+  isSafeMediaUrl,
+  toggleFavoriteGif,
+  type GifCategory,
+  type GifItem,
+} from '../lib/gifLibrary';
 import { OFFICIAL_BOTS, SLASH_COMMANDS } from '../lib/turcordBots';
 import { Avatar, VerifiedBotBadge } from './Avatar';
 import { MessageItem } from './MessageItem';
 
-const COMPOSER_EMOJIS = ['😀', '😂', '🥹', '🔥', '❤️', '👍', '🎉', '🎮', '💻', '🚀', '👀', '✅', '⚡', '🇹🇷', '☕', '🎧'];
+const COMPOSER_EMOJIS = [
+  '😀', '😂', '🥹', '😍', '😎', '🤯', '😭', '😡',
+  '🔥', '❤️', '👍', '👎', '👏', '🎉', '🏆', '🎮',
+  '💻', '🚀', '👀', '✅', '⚡', '💀', '🤝', '🫡',
+  '🇹🇷', '☕', '🎧', '🍕', '🎵', '💯', '✨', '🌟',
+];
 
 interface ChatAreaProps {
   mode: 'channel' | 'dm';
@@ -33,6 +49,7 @@ interface ChatAreaProps {
   currentUid: string;
   canModerate: boolean;
   canPin: boolean;
+  serverEmojis?: ServerEmoji[];
   showMemberList?: boolean;
   showTypingIndicator?: boolean;
   compactMode?: boolean;
@@ -42,6 +59,7 @@ interface ChatAreaProps {
   botThinking?: boolean;
   quickPrompts?: string[];
   onRunDiagnostics?: () => void;
+  onOpenEmojiSettings?: () => void;
   onToggleMemberList?: () => void;
   typingUsers: Array<{ uid: string; displayName: string }>;
   onTyping: (channelKey: string, isTyping: boolean) => void;
@@ -61,6 +79,15 @@ interface ChatAreaProps {
 }
 
 async function compressImageToDataUrl(file: File): Promise<string> {
+  if (file.type === 'image/gif') {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ''));
+      reader.onerror = () => reject(new Error('GIF dosyası okunamadı.'));
+      reader.readAsDataURL(file);
+    });
+  }
+
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => {
@@ -104,6 +131,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   currentUid,
   canModerate,
   canPin,
+  serverEmojis = [],
   showMemberList,
   showTypingIndicator = true,
   compactMode = false,
@@ -113,6 +141,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   botThinking = false,
   quickPrompts,
   onRunDiagnostics,
+  onOpenEmojiSettings,
   onToggleMemberList,
   typingUsers,
   onTyping,
@@ -135,15 +164,28 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [pinsOpen, setPinsOpen] = useState(false);
   const [emojiOpen, setEmojiOpen] = useState(false);
+  const [emojiSearch, setEmojiSearch] = useState('');
+  const [gifOpen, setGifOpen] = useState(false);
+  const [gifQuery, setGifQuery] = useState('');
+  const [gifCategory, setGifCategory] = useState<GifCategory | 'Favoriler'>('Tümü');
+  const [favoriteGifs, setFavoriteGifs] = useState<GifItem[]>(() => getFavoriteGifs());
+  const [remoteGifs, setRemoteGifs] = useState<GifItem[]>([]);
+  const [gifCustomUrl, setGifCustomUrl] = useState('');
+  const [gifUrlError, setGifUrlError] = useState<string | null>(null);
   const [slashIndex, setSlashIndex] = useState(0);
+  const [emojiAutoIndex, setEmojiAutoIndex] = useState(0);
 
+  const feedRef = useRef<HTMLDivElement | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const typingTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const el = feedRef.current;
+    if (el) {
+      el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+    }
   }, [messages.length, channelKey]);
 
   useEffect(() => {
@@ -151,8 +193,23 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     setSearchOpen(false);
     setSearchQuery('');
     setPinsOpen(false);
+    setEmojiOpen(false);
+    setGifOpen(false);
     setUploadError(null);
   }, [channelKey]);
+
+  useEffect(() => {
+    if (!gifOpen || gifCategory === 'Favoriler') return;
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      const remote = await fetchRemoteGifs(gifQuery);
+      if (!cancelled) setRemoteGifs(remote);
+    }, 220);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [gifOpen, gifQuery, gifCategory]);
 
   const filteredMessages = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -177,13 +234,93 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     });
   }, [enableSlashCommands, text, mode, enabledBots]);
 
+  const emojiShortcodeMatch = useMemo(() => {
+    if (serverEmojis.length === 0) return null;
+    const m = /(?:^|\s):([a-z0-9_]{1,24})$/i.exec(text);
+    if (!m) return null;
+    const needle = m[1].toLowerCase();
+    const list = serverEmojis.filter((e) => e.name.toLowerCase().includes(needle)).slice(0, 8);
+    return list.length > 0 ? { query: m[1], list } : null;
+  }, [serverEmojis, text]);
+
+  const displayedGifs = useMemo(() => {
+    if (gifCategory === 'Favoriler') {
+      const q = gifQuery.trim().toLowerCase();
+      return favoriteGifs.filter(
+        (g) => !q || g.title.toLowerCase().includes(q) || g.tags.some((t) => t.toLowerCase().includes(q))
+      );
+    }
+    const builtins = filterBuiltinGifs(gifQuery, gifCategory);
+    if (gifCategory === 'Tümü' && remoteGifs.length > 0) {
+      const seen = new Set(builtins.map((b) => b.url));
+      return [...builtins, ...remoteGifs.filter((r) => !seen.has(r.url))];
+    }
+    return builtins;
+  }, [gifCategory, gifQuery, favoriteGifs, remoteGifs]);
+
+  const filteredServerEmojis = useMemo(() => {
+    const q = emojiSearch.trim().toLowerCase();
+    if (!q) return serverEmojis;
+    return serverEmojis.filter((e) => e.name.toLowerCase().includes(q));
+  }, [serverEmojis, emojiSearch]);
+
   useEffect(() => {
     setSlashIndex(0);
   }, [activeSlashMatches.length, text]);
 
+  useEffect(() => {
+    setEmojiAutoIndex(0);
+  }, [emojiShortcodeMatch?.list.length, text]);
+
   const handleSelectSlashCommand = (usage: string) => {
     setText(usage);
     inputRef.current?.focus();
+  };
+
+  const handleSelectAutocompleteEmoji = (emojiName: string) => {
+    setText((prev) => prev.replace(/:([a-z0-9_]{1,24})$/i, `:${emojiName}: `));
+    inputRef.current?.focus();
+  };
+
+  const handleSendGif = async (gif: GifItem) => {
+    if (sending) return;
+    setSending(true);
+    setGifOpen(false);
+    setUploadError(null);
+    onTyping(channelKey, false);
+    try {
+      await onSendMessage({
+        content: text.trim(),
+        attachmentUrl: gif.url,
+        attachmentName: `${gif.title || 'gif'}.gif`.slice(0, 120),
+        replyTo,
+      });
+      setText('');
+      setReplyTo(null);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const handleSendCustomGifUrl = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setGifUrlError(null);
+    const trimmed = gifCustomUrl.trim();
+    if (!isSafeMediaUrl(trimmed)) {
+      setGifUrlError('Geçerli bir https:// GIF bağlantısı yapıştırın.');
+      return;
+    }
+    const item: GifItem = {
+      id: `url_${Date.now()}`,
+      title: 'Özel GIF',
+      url: trimmed,
+      previewUrl: trimmed,
+      category: 'Tepki',
+      tags: ['url'],
+      isRemote: true,
+    };
+    setGifCustomUrl('');
+    await handleSendGif(item);
   };
 
   const handleInputChange = (val: string) => {
@@ -253,7 +390,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   };
 
   return (
-    <div className="flex-1 flex flex-col min-w-0 bg-[var(--bg-surface)]">
+    <div className="flex-1 flex flex-col min-w-0 min-h-0 h-full overflow-hidden bg-[var(--bg-surface)]">
       {/* Top Bar */}
       <header className="h-12 shrink-0 px-4 border-b border-[var(--border-subtle)] flex items-center justify-between gap-4">
         <div className="flex items-center gap-2.5 min-w-0">
@@ -395,7 +532,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       </header>
 
       {/* Message Feed */}
-      <div className="flex-1 overflow-y-auto py-4">
+      <div ref={feedRef} className="flex-1 min-h-0 overflow-y-auto py-4">
         <div className="px-4 pb-4 mb-2 border-b border-[var(--border-subtle)]">
           {isBotThread ? (
             <div className="mb-3">
@@ -451,6 +588,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               currentUid={currentUid}
               canModerate={canModerate}
               canPin={canPin}
+              serverEmojis={serverEmojis}
               onReply={setReplyTo}
               onEdit={onEditMessage}
               onDelete={onDeleteMessage}
@@ -497,6 +635,37 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                       </div>
                     </div>
                     <VerifiedBotBadge />
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Custom Emoji :shortcode: Autocomplete Popup */}
+        {!activeSlashMatches.length && emojiShortcodeMatch && (
+          <div className="mb-2 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-subtle)] shadow-2xl overflow-hidden z-30">
+            <div className="px-3.5 py-1.5 border-b border-[var(--border-subtle)] flex items-center justify-between text-[11px] font-semibold text-[var(--text-muted)] uppercase">
+              <span>Sunucu Emojileri</span>
+              <span>↑↓ Seç · Tab Ekle</span>
+            </div>
+            <div className="max-h-52 overflow-y-auto divide-y divide-[var(--border-subtle)]/40">
+              {emojiShortcodeMatch.list.map((em, idx) => {
+                const selected = idx === emojiAutoIndex;
+                return (
+                  <button
+                    key={em.id}
+                    type="button"
+                    onClick={() => handleSelectAutocompleteEmoji(em.name)}
+                    className={`w-full flex items-center justify-between gap-3 px-3.5 py-2 text-left transition-colors cursor-pointer ${
+                      selected ? 'bg-[#5865F2]/20' : 'hover:bg-[var(--bg-hover)]'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <img src={em.imageUrl} alt={`:${em.name}:`} className="w-6 h-6 object-contain shrink-0" />
+                      <span className="font-mono text-sm font-medium text-white truncate">:{em.name}:</span>
+                    </div>
+                    <span className="text-[11px] text-[var(--text-muted)] shrink-0">Özel Emoji</span>
                   </button>
                 );
               })}
@@ -594,6 +763,26 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   return;
                 }
               }
+              if (emojiShortcodeMatch && emojiShortcodeMatch.list.length > 0) {
+                if (e.key === 'ArrowDown') {
+                  e.preventDefault();
+                  setEmojiAutoIndex((i) => (i + 1) % emojiShortcodeMatch.list.length);
+                  return;
+                }
+                if (e.key === 'ArrowUp') {
+                  e.preventDefault();
+                  setEmojiAutoIndex(
+                    (i) => (i - 1 + emojiShortcodeMatch.list.length) % emojiShortcodeMatch.list.length
+                  );
+                  return;
+                }
+                if (e.key === 'Tab') {
+                  e.preventDefault();
+                  const chosen = emojiShortcodeMatch.list[emojiAutoIndex];
+                  if (chosen) handleSelectAutocompleteEmoji(chosen.name);
+                  return;
+                }
+              }
             }}
             placeholder={
               isBotThread
@@ -608,30 +797,271 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             className="flex-1 bg-transparent text-[15px] text-[var(--text-primary)] placeholder-[var(--text-muted)] outline-none min-w-0"
           />
 
+          {/* GIF Picker Button & Popover */}
           <div className="relative shrink-0">
             <button
               type="button"
-              onClick={() => setEmojiOpen((o) => !o)}
+              onClick={() => {
+                setGifOpen((o) => !o);
+                setEmojiOpen(false);
+              }}
+              title="GIF Gönder"
+              className={`px-2 py-1 rounded-md text-[11px] font-bold tracking-wide border transition-colors cursor-pointer ${
+                gifOpen
+                  ? 'bg-[#5865F2] border-[#5865F2] text-white'
+                  : 'bg-[var(--bg-card)] border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-white hover:border-[var(--text-muted)]'
+              }`}
+            >
+              GIF
+            </button>
+            {gifOpen && (
+              <div className="fixed sm:absolute left-4 right-4 sm:left-auto sm:right-0 bottom-20 sm:bottom-11 sm:w-[360px] bg-[var(--bg-card)] border border-[var(--border-subtle)] rounded-2xl shadow-2xl z-40 overflow-hidden flex flex-col max-h-[420px]">
+                <div className="p-3 border-b border-[var(--border-subtle)] space-y-2.5">
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1 flex items-center gap-2 px-2.5 py-1.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)]">
+                      <Search className="w-3.5 h-3.5 text-[var(--text-muted)] shrink-0" />
+                      <input
+                        type="text"
+                        value={gifQuery}
+                        onChange={(e) => setGifQuery(e.target.value)}
+                        placeholder="GIF ara (ör: gg, kalp, haha, dans)..."
+                        autoFocus
+                        className="w-full bg-transparent text-xs text-white placeholder-[var(--text-muted)] outline-none"
+                      />
+                      {gifQuery && (
+                        <button
+                          type="button"
+                          onClick={() => setGifQuery('')}
+                          className="text-[var(--text-muted)] hover:text-white cursor-pointer"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setGifOpen(false)}
+                      className="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-white cursor-pointer"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  <div className="flex items-center gap-1 overflow-x-auto pb-0.5">
+                    {(['Favoriler', ...GIF_CATEGORIES] as const).map((cat) => (
+                      <button
+                        key={cat}
+                        type="button"
+                        onClick={() => setGifCategory(cat)}
+                        className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-medium whitespace-nowrap cursor-pointer ${
+                          gifCategory === cat
+                            ? 'bg-[#5865F2] text-white'
+                            : 'bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:text-white'
+                        }`}
+                      >
+                        {cat === 'Favoriler' && <Star className="w-3 h-3" />}
+                        <span>{cat}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="p-2.5 overflow-y-auto flex-1">
+                  {displayedGifs.length === 0 ? (
+                    <div className="py-10 text-center text-xs text-[var(--text-muted)] space-y-1">
+                      <p>
+                        {gifCategory === 'Favoriler'
+                          ? 'Henüz favori GIF eklemedin. Beğendiğin GIF’lerin yıldızına dokunabilirsin.'
+                          : 'Eşleşen GIF bulunamadı.'}
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-2">
+                      {displayedGifs.map((gif) => {
+                        const isFav = favoriteGifs.some((f) => f.url === gif.url || f.id === gif.id);
+                        return (
+                          <div
+                            key={gif.id}
+                            className="group/gif relative rounded-xl overflow-hidden border border-[var(--border-subtle)] bg-[var(--bg-surface)] aspect-[16/10]"
+                          >
+                            <button
+                              type="button"
+                              onClick={() => void handleSendGif(gif)}
+                              className="w-full h-full block cursor-pointer"
+                            >
+                              <img
+                                src={gif.previewUrl}
+                                alt={gif.title}
+                                referrerPolicy="no-referrer"
+                                className="w-full h-full object-cover group-hover/gif:scale-105 transition-transform"
+                              />
+                              <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 via-black/35 to-transparent px-2 py-1 text-left">
+                                <span className="text-[11px] font-medium text-white truncate block">
+                                  {gif.title}
+                                </span>
+                              </div>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setFavoriteGifs(toggleFavoriteGif(gif));
+                              }}
+                              title={isFav ? 'Favorilerden Kaldır' : 'Favorilere Ekle'}
+                              className={`absolute top-1.5 right-1.5 p-1 rounded-lg bg-black/60 backdrop-blur-sm transition-opacity cursor-pointer ${
+                                isFav
+                                  ? 'text-amber-400 opacity-100'
+                                  : 'text-white/75 opacity-0 group-hover/gif:opacity-100 hover:text-amber-300'
+                              }`}
+                            >
+                              <Star className="w-3.5 h-3.5" fill={isFav ? 'currentColor' : 'none'} />
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Custom GIF URL Input */}
+                <form
+                  onSubmit={handleSendCustomGifUrl}
+                  className="p-2.5 border-t border-[var(--border-subtle)] bg-[var(--bg-surface)] space-y-1.5"
+                >
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="url"
+                      value={gifCustomUrl}
+                      onChange={(e) => {
+                        setGifCustomUrl(e.target.value);
+                        setGifUrlError(null);
+                      }}
+                      placeholder="Veya https://... GIF linki yapıştır"
+                      className="flex-1 min-w-0 px-2.5 py-1.5 rounded-lg bg-[var(--bg-input)] border border-[var(--border-subtle)] text-[11px] text-white placeholder-[var(--text-muted)] outline-none"
+                    />
+                    <button
+                      type="submit"
+                      disabled={!gifCustomUrl.trim() || sending}
+                      className="px-2.5 py-1.5 rounded-lg bg-[#5865F2] hover:bg-[#4752C4] disabled:opacity-45 text-white text-[11px] font-medium cursor-pointer shrink-0"
+                    >
+                      Gönder
+                    </button>
+                  </div>
+                  {gifUrlError && <p className="text-[11px] text-rose-400">{gifUrlError}</p>}
+                </form>
+              </div>
+            )}
+          </div>
+
+          {/* Emoji Picker Button & Popover */}
+          <div className="relative shrink-0">
+            <button
+              type="button"
+              onClick={() => {
+                setEmojiOpen((o) => !o);
+                setGifOpen(false);
+              }}
               title="Emoji Seç"
-              className="p-1.5 rounded-full text-[var(--text-secondary)] hover:text-white hover:bg-[var(--bg-hover)] transition-colors cursor-pointer"
+              className={`p-1.5 rounded-full transition-colors cursor-pointer ${
+                emojiOpen
+                  ? 'bg-[#5865F2] text-white'
+                  : 'text-[var(--text-secondary)] hover:text-white hover:bg-[var(--bg-hover)]'
+              }`}
             >
               <Smile className="w-5 h-5" />
             </button>
             {emojiOpen && (
-              <div className="absolute bottom-11 right-0 w-56 bg-[var(--bg-card)] border border-[var(--border-subtle)] rounded-xl p-2 shadow-2xl grid grid-cols-4 gap-1 z-30">
-                {COMPOSER_EMOJIS.map((em) => (
+              <div className="fixed sm:absolute left-4 right-4 sm:left-auto sm:right-0 bottom-20 sm:bottom-11 sm:w-80 bg-[var(--bg-card)] border border-[var(--border-subtle)] rounded-2xl p-3 shadow-2xl z-40 space-y-3 max-h-[380px] flex flex-col">
+                <div className="flex items-center gap-2">
+                  <div className="flex-1 flex items-center gap-2 px-2.5 py-1.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)]">
+                    <Search className="w-3.5 h-3.5 text-[var(--text-muted)] shrink-0" />
+                    <input
+                      type="text"
+                      value={emojiSearch}
+                      onChange={(e) => setEmojiSearch(e.target.value)}
+                      placeholder="Emoji ara (:kisa_ad:)..."
+                      className="w-full bg-transparent text-xs text-white placeholder-[var(--text-muted)] outline-none"
+                    />
+                  </div>
                   <button
-                    key={em}
                     type="button"
-                    onClick={() => {
-                      setText((t) => t + em);
-                      setEmojiOpen(false);
-                    }}
-                    className="p-1.5 rounded hover:bg-[var(--bg-elevated)] text-lg cursor-pointer"
+                    onClick={() => setEmojiOpen(false)}
+                    className="p-1 rounded-lg text-[var(--text-muted)] hover:text-white cursor-pointer"
                   >
-                    {em}
+                    <X className="w-4 h-4" />
                   </button>
-                ))}
+                </div>
+
+                <div className="overflow-y-auto space-y-3 pr-0.5">
+                  {mode === 'channel' && (
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--text-muted)]">
+                          Sunucu Emojileri ({filteredServerEmojis.length})
+                        </span>
+                        {onOpenEmojiSettings && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEmojiOpen(false);
+                              onOpenEmojiSettings();
+                            }}
+                            className="text-[11px] font-medium text-[#949CF7] hover:underline cursor-pointer"
+                          >
+                            + Emoji Ekle
+                          </button>
+                        )}
+                      </div>
+                      {filteredServerEmojis.length === 0 ? (
+                        <p className="text-[11px] text-[var(--text-muted)] py-2">
+                          {serverEmojis.length === 0
+                            ? 'Bu sunucuda henüz özel emoji yok.'
+                            : 'Aramayla eşleşen özel emoji bulunamadı.'}
+                        </p>
+                      ) : (
+                        <div className="grid grid-cols-6 gap-1">
+                          {filteredServerEmojis.map((se) => (
+                            <button
+                              key={se.id}
+                              type="button"
+                              title={`:${se.name}:`}
+                              onClick={() => {
+                                setText((t) => `${t}${t && !t.endsWith(' ') ? ' ' : ''}:${se.name}: `);
+                                setEmojiOpen(false);
+                                inputRef.current?.focus();
+                              }}
+                              className="p-1.5 rounded-lg hover:bg-[var(--bg-elevated)] flex items-center justify-center cursor-pointer"
+                            >
+                              <img src={se.imageUrl} alt={`:${se.name}:`} className="w-7 h-7 object-contain" />
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="space-y-1.5">
+                    <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--text-muted)]">
+                      Standart Emojiler
+                    </span>
+                    <div className="grid grid-cols-8 gap-1">
+                      {COMPOSER_EMOJIS.map((em) => (
+                        <button
+                          key={em}
+                          type="button"
+                          onClick={() => {
+                            setText((t) => t + em);
+                            setEmojiOpen(false);
+                            inputRef.current?.focus();
+                          }}
+                          className="p-1 rounded-lg hover:bg-[var(--bg-elevated)] text-lg cursor-pointer flex items-center justify-center"
+                        >
+                          {em}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
               </div>
             )}
           </div>

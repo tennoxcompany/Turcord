@@ -12,6 +12,7 @@ import {
   PhoneOff,
   Plus,
   Settings,
+  Smile,
   UserPlus,
   Video,
   Volume2,
@@ -52,7 +53,7 @@ interface ChannelSidebarProps {
   onToggleScreenShare: () => void;
   onOpenInvite: () => void;
   onOpenCreateChannel: (defaultType?: 'text' | 'voice') => void;
-  onOpenServerSettings: () => void;
+  onOpenServerSettings: (initialTab?: 'general' | 'members' | 'bots' | 'emojis') => void;
   onOpenUserSettings: () => void;
   onOpenProfile?: () => void;
   onOpenNotifications?: () => void;
@@ -112,7 +113,7 @@ export const ChannelSidebar: React.FC<ChannelSidebarProps> = ({
   };
 
   return (
-    <aside className="w-[240px] shrink-0 bg-[var(--bg-sidebar)] flex flex-col border-r border-[var(--border-subtle)] select-none">
+    <aside className="w-[240px] h-full min-h-0 shrink-0 bg-[var(--bg-sidebar)] flex flex-col border-r border-[var(--border-subtle)] select-none">
       {/* Server Header */}
       <div className="relative">
         <button
@@ -155,12 +156,24 @@ export const ChannelSidebar: React.FC<ChannelSidebarProps> = ({
                 <button
                   onClick={() => {
                     setMenuOpen(false);
-                    onOpenServerSettings();
+                    onOpenServerSettings('general');
                   }}
                   className="w-full flex items-center justify-between px-2.5 py-2 rounded-lg text-[var(--text-primary)] hover:bg-[#5865F2] hover:text-white transition-colors cursor-pointer"
                 >
                   <span>Sunucu Ayarları</span>
                   <Settings className="w-4 h-4" />
+                </button>
+              )}
+              {canManageChannels && (
+                <button
+                  onClick={() => {
+                    setMenuOpen(false);
+                    onOpenServerSettings('emojis');
+                  }}
+                  className="w-full flex items-center justify-between px-2.5 py-2 rounded-lg text-[var(--text-primary)] hover:bg-[#5865F2] hover:text-white transition-colors cursor-pointer"
+                >
+                  <span>Özel Emojiler</span>
+                  <Smile className="w-4 h-4" />
                 </button>
               )}
               {myRole !== 'owner' && (

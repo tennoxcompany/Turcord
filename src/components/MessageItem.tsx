@@ -1,6 +1,20 @@
-import React, { useState } from 'react';
-import { Bookmark, Check, CornerUpLeft, Pencil, Pin, SmilePlus, Trash2, X } from 'lucide-react';
-import type { ChatMessage } from '../types/halka';
+import React, { useEffect, useRef, useState } from 'react';
+import {
+  Bookmark,
+  Check,
+  Copy,
+  CornerUpLeft,
+  Download,
+  Maximize2,
+  MoreHorizontal,
+  Pencil,
+  Pin,
+  SmilePlus,
+  Trash2,
+  X,
+} from 'lucide-react';
+import type { ChatMessage, ServerEmoji } from '../types/halka';
+import { isSafeMediaUrl } from '../lib/gifLibrary';
 import { isOfficialBotUid } from '../lib/turcordBots';
 import { Avatar, VerifiedBotBadge } from './Avatar';
 
@@ -13,6 +27,7 @@ interface MessageItemProps {
   currentUid: string;
   canModerate: boolean;
   canPin: boolean;
+  serverEmojis?: ServerEmoji[];
   onReply: (msg: ChatMessage) => void;
   onEdit: (msgId: string, newContent: string) => Promise<void>;
   onDelete: (msgId: string) => Promise<void>;
@@ -21,6 +36,11 @@ interface MessageItemProps {
   onBookmark?: (msg: ChatMessage) => Promise<void>;
   onAuthorClick?: (uid: string) => void;
 }
+
+type ActionMenuState =
+  | { open: false }
+  | { open: true; mode: 'sheet' }
+  | { open: true; mode: 'popover'; x: number; y: number };
 
 function formatTime(msg: ChatMessage): string {
   const date = msg.createdAt?.toDate ? msg.createdAt.toDate() : new Date();
@@ -39,11 +59,63 @@ function formatFullDate(msg: ChatMessage): string {
   return `${date.toLocaleDateString('tr-TR', { day: '2-digit', month: '2-digit', year: 'numeric' })} ${timeStr}`;
 }
 
-function renderInlineFormatting(text: string): React.ReactNode[] {
-  const tokenRegex = /(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`|https?:\/\/[^\s]+)/g;
+async function downloadAttachment(url: string, filename?: string): Promise<void> {
+  const safeName = (filename || 'turcord-gorsel.webp').replace(/[/\\?%*:|"<>]/g, '_');
+  const triggerLink = (href: string) => {
+    const a = document.createElement('a');
+    a.href = href;
+    a.download = safeName;
+    a.rel = 'noopener noreferrer';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  };
+
+  if (url.startsWith('data:') || url.startsWith('blob:')) {
+    triggerLink(url);
+    return;
+  }
+
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('Download failed');
+    const blob = await res.blob();
+    const objUrl = URL.createObjectURL(blob);
+    triggerLink(objUrl);
+    setTimeout(() => URL.revokeObjectURL(objUrl), 4000);
+  } catch {
+    triggerLink(url);
+  }
+}
+
+function renderInlineFormatting(
+  text: string,
+  emojiMap: Map<string, ServerEmoji>,
+  jumbo = false
+): React.ReactNode[] {
+  const tokenRegex = /(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`|https?:\/\/[^\s]+|:[a-z0-9_]{2,24}:)/g;
   const parts = text.split(tokenRegex);
   return parts.map((part, idx) => {
     if (!part) return null;
+    if (part.startsWith(':') && part.endsWith(':') && part.length >= 4) {
+      const code = part.slice(1, -1);
+      const custom = emojiMap.get(code);
+      if (custom && isSafeMediaUrl(custom.imageUrl)) {
+        return (
+          <img
+            key={idx}
+            src={custom.imageUrl}
+            alt={part}
+            title={part}
+            draggable={false}
+            className={`inline-block align-middle object-contain mx-0.5 rounded select-none ${
+              jumbo ? 'w-11 h-11' : 'w-6 h-6'
+            }`}
+          />
+        );
+      }
+      return <React.Fragment key={idx}>{part}</React.Fragment>;
+    }
     if (part.startsWith('**') && part.endsWith('**') && part.length > 4) {
       return (
         <strong key={idx} className="font-semibold text-white">
@@ -85,8 +157,20 @@ function renderInlineFormatting(text: string): React.ReactNode[] {
   });
 }
 
-function renderMessageContent(content: string): React.ReactNode {
+function isEmojiOnlyMessage(content: string, emojiMap: Map<string, ServerEmoji>): boolean {
+  const trimmed = content.trim();
+  if (!trimmed || emojiMap.size === 0) return false;
+  const tokens = trimmed.split(/\s+/);
+  if (tokens.length === 0 || tokens.length > 4) return false;
+  return tokens.every((tok) => {
+    if (!/^:[a-z0-9_]{2,24}:$/.test(tok)) return false;
+    return emojiMap.has(tok.slice(1, -1));
+  });
+}
+
+function renderMessageContent(content: string, emojiMap: Map<string, ServerEmoji>): React.ReactNode {
   if (!content) return null;
+  const jumbo = isEmojiOnlyMessage(content, emojiMap);
   const codeBlockParts = content.split(/(```[\s\S]*?```)/g);
   return codeBlockParts.map((block, bIdx) => {
     if (block.startsWith('```') && block.endsWith('```') && block.length >= 6) {
@@ -108,13 +192,13 @@ function renderMessageContent(content: string): React.ReactNode {
             key={`${bIdx}-${lIdx}`}
             className="my-0.5 pl-3 text-[#B5BAC1] bg-[#2B2D31]/50 rounded py-0.5"
           >
-            {renderInlineFormatting(line.slice(2))}
+            {renderInlineFormatting(line.slice(2), emojiMap, false)}
           </div>
         );
       }
       return (
         <span key={`${bIdx}-${lIdx}`} className="block min-h-[1.35rem]">
-          {renderInlineFormatting(line)}
+          {renderInlineFormatting(line, emojiMap, jumbo)}
         </span>
       );
     });
@@ -128,6 +212,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
   currentUid,
   canModerate,
   canPin,
+  serverEmojis = [],
   onReply,
   onEdit,
   onDelete,
@@ -141,10 +226,46 @@ export const MessageItem: React.FC<MessageItemProps> = ({
   const [emojiMenuOpen, setEmojiMenuOpen] = useState(false);
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [bookmarked, setBookmarked] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [actionMenu, setActionMenu] = useState<ActionMenuState>({ open: false });
+
+  const longPressTimerRef = useRef<number | null>(null);
+  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
+  const triggeredLongPressRef = useRef(false);
 
   const isAuthor = message.authorId === currentUid;
   const isBotMsg = Boolean(message.isBot) || isOfficialBotUid(message.authorId);
   const reactionsEntries = Object.entries(message.reactions || {}).filter(([, uids]) => uids.length > 0);
+  const emojiMap = React.useMemo(() => {
+    const map = new Map<string, ServerEmoji>();
+    for (const em of serverEmojis) {
+      map.set(em.name, em);
+    }
+    return map;
+  }, [serverEmojis]);
+  const safeAttachmentUrl = message.attachmentUrl && isSafeMediaUrl(message.attachmentUrl) ? message.attachmentUrl : '';
+
+  const clearLongPressTimer = () => {
+    if (longPressTimerRef.current !== null) {
+      window.clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  };
+
+  useEffect(() => {
+    return () => clearLongPressTimer();
+  }, []);
+
+  useEffect(() => {
+    if (!actionMenu.open) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setActionMenu({ open: false });
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [actionMenu.open]);
 
   const handleSaveEdit = async () => {
     if (!draft.trim() || draft.trim() === message.content) {
@@ -155,13 +276,82 @@ export const MessageItem: React.FC<MessageItemProps> = ({
     setEditing(false);
   };
 
+  const openMenuAtPoint = (clientX: number, clientY: number) => {
+    if (window.innerWidth < 640) {
+      setActionMenu({ open: true, mode: 'sheet' });
+      return;
+    }
+    const menuWidth = 256;
+    const menuHeight = 360;
+    const x = Math.max(12, Math.min(clientX, window.innerWidth - menuWidth - 12));
+    const y = Math.max(12, Math.min(clientY, window.innerHeight - menuHeight - 12));
+    setActionMenu({ open: true, mode: 'popover', x, y });
+  };
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    if (editing || e.touches.length !== 1) return;
+    const touch = e.touches[0];
+    touchStartRef.current = { x: touch.clientX, y: touch.clientY };
+    triggeredLongPressRef.current = false;
+    clearLongPressTimer();
+    longPressTimerRef.current = window.setTimeout(() => {
+      triggeredLongPressRef.current = true;
+      if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+        navigator.vibrate?.(14);
+      }
+      setActionMenu({ open: true, mode: 'sheet' });
+    }, 420);
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (!touchStartRef.current || e.touches.length !== 1) return;
+    const touch = e.touches[0];
+    const dx = Math.abs(touch.clientX - touchStartRef.current.x);
+    const dy = Math.abs(touch.clientY - touchStartRef.current.y);
+    if (dx > 10 || dy > 10) {
+      clearLongPressTimer();
+    }
+  };
+
+  const handleTouchEndOrCancel = () => {
+    clearLongPressTimer();
+    touchStartRef.current = null;
+  };
+
+  const handleContextMenu = (e: React.MouseEvent) => {
+    if (editing) return;
+    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+    e.preventDefault();
+    e.stopPropagation();
+    openMenuAtPoint(e.clientX, e.clientY);
+  };
+
+  const handleCopyText = async () => {
+    if (!message.content) return;
+    try {
+      await navigator.clipboard.writeText(message.content);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Clipboard unavailable
+    }
+    setActionMenu({ open: false });
+  };
+
+  const closeMenu = () => setActionMenu({ open: false });
+
   return (
     <div
-      className={`group relative px-4 ${compactMode ? 'py-0.5' : 'py-1'} hover:bg-[var(--bg-hover)]/75 transition-colors ${
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEndOrCancel}
+      onTouchCancel={handleTouchEndOrCancel}
+      onContextMenu={handleContextMenu}
+      className={`group relative px-4 ${compactMode ? 'py-0.5' : 'py-1'} hover:bg-[var(--bg-hover)]/75 transition-colors select-none ${
         grouped ? 'mt-0.5' : compactMode ? 'mt-1.5 pt-0.5' : 'mt-3.5 pt-1'
       } ${message.pinned ? 'bg-[#F0B232]/5' : ''} ${
         isBotMsg && !grouped ? 'border-l-2 border-[#5865F2]/60' : ''
-      }`}
+      } ${actionMenu.open ? 'bg-[#5865F2]/12' : ''}`}
     >
       {/* Reply Reference Header */}
       {message.replyToId && (
@@ -256,7 +446,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
             </div>
           ) : (
             <div className="text-[15px] text-[var(--text-primary)] leading-[1.45] break-words">
-              {renderMessageContent(message.content)}
+              {renderMessageContent(message.content, emojiMap)}
               {message.edited && (
                 <span className="ml-1.5 text-[10px] text-[var(--text-muted)] select-none">(düzenlendi)</span>
               )}
@@ -264,18 +454,28 @@ export const MessageItem: React.FC<MessageItemProps> = ({
           )}
 
           {/* Attachment */}
-          {message.attachmentUrl && (
+          {safeAttachmentUrl && (
             <div className="mt-2">
               <button
                 type="button"
-                onClick={() => setLightboxOpen(true)}
-                className="block max-w-sm rounded-lg overflow-hidden border border-[var(--border-subtle)] bg-[var(--bg-card)] cursor-pointer"
+                onClick={(e) => {
+                  if (triggeredLongPressRef.current) {
+                    e.preventDefault();
+                    triggeredLongPressRef.current = false;
+                    return;
+                  }
+                  setLightboxOpen(true);
+                }}
+                onContextMenu={handleContextMenu}
+                className="block max-w-sm rounded-lg overflow-hidden border border-[var(--border-subtle)] bg-[var(--bg-card)] cursor-pointer select-none"
               >
                 <img
-                  src={message.attachmentUrl}
+                  src={safeAttachmentUrl}
                   alt={message.attachmentName || 'Ek görsel'}
                   referrerPolicy="no-referrer"
-                  className="max-h-72 w-auto object-contain"
+                  draggable={false}
+                  onContextMenu={(e) => e.preventDefault()}
+                  className="max-h-72 w-auto object-contain pointer-events-none select-none"
                 />
               </button>
             </div>
@@ -286,17 +486,28 @@ export const MessageItem: React.FC<MessageItemProps> = ({
             <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
               {reactionsEntries.map(([emoji, uids]) => {
                 const reacted = uids.includes(currentUid);
+                const customMatch = /^:([a-z0-9_]{2,24}):$/.exec(emoji);
+                const customEmoji = customMatch ? emojiMap.get(customMatch[1]) : undefined;
                 return (
                   <button
                     key={emoji}
                     onClick={() => onToggleReaction(message, emoji)}
+                    title={emoji}
                     className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-xs border transition-colors cursor-pointer ${
                       reacted
                         ? 'bg-[#5865F2]/20 border-[#5865F2] text-white'
                         : 'bg-[var(--bg-card)] border-[var(--border-subtle)] text-[var(--text-secondary)] hover:border-[var(--text-muted)]'
                     }`}
                   >
-                    <span>{emoji}</span>
+                    {customEmoji && isSafeMediaUrl(customEmoji.imageUrl) ? (
+                      <img
+                        src={customEmoji.imageUrl}
+                        alt={emoji}
+                        className="w-4 h-4 object-contain"
+                      />
+                    ) : (
+                      <span>{emoji}</span>
+                    )}
                     <span className="tabular-nums font-medium">{uids.length}</span>
                   </button>
                 );
@@ -328,19 +539,42 @@ export const MessageItem: React.FC<MessageItemProps> = ({
               <SmilePlus className="w-4 h-4" />
             </button>
             {emojiMenuOpen && (
-              <div className="absolute right-0 top-8 bg-[var(--bg-card)] border border-[var(--border-subtle)] rounded-lg p-1.5 flex items-center gap-1 shadow-xl z-20">
-                {QUICK_EMOJIS.map((em) => (
-                  <button
-                    key={em}
-                    onClick={() => {
-                      setEmojiMenuOpen(false);
-                      onToggleReaction(message, em);
-                    }}
-                    className="p-1.5 rounded hover:bg-[var(--bg-elevated)] text-base cursor-pointer"
-                  >
-                    {em}
-                  </button>
-                ))}
+              <div className="absolute right-0 top-8 bg-[var(--bg-card)] border border-[var(--border-subtle)] rounded-lg p-1.5 shadow-xl z-20 min-w-[200px] space-y-1.5">
+                <div className="flex items-center gap-1">
+                  {QUICK_EMOJIS.map((em) => (
+                    <button
+                      key={em}
+                      onClick={() => {
+                        setEmojiMenuOpen(false);
+                        onToggleReaction(message, em);
+                      }}
+                      className="p-1.5 rounded hover:bg-[var(--bg-elevated)] text-base cursor-pointer"
+                    >
+                      {em}
+                    </button>
+                  ))}
+                </div>
+                {serverEmojis.length > 0 && (
+                  <div className="pt-1 border-t border-[var(--border-subtle)] flex flex-wrap gap-1 max-w-[220px] max-h-28 overflow-y-auto">
+                    {serverEmojis.map((se) => (
+                      <button
+                        key={se.id}
+                        onClick={() => {
+                          setEmojiMenuOpen(false);
+                          onToggleReaction(message, `:${se.name}:`);
+                        }}
+                        title={`:${se.name}:`}
+                        className="p-1 rounded hover:bg-[var(--bg-elevated)] cursor-pointer"
+                      >
+                        <img
+                          src={se.imageUrl}
+                          alt={`:${se.name}:`}
+                          className="w-5 h-5 object-contain"
+                        />
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -351,6 +585,15 @@ export const MessageItem: React.FC<MessageItemProps> = ({
           >
             <CornerUpLeft className="w-4 h-4" />
           </button>
+          {safeAttachmentUrl && (
+            <button
+              onClick={() => downloadAttachment(safeAttachmentUrl, message.attachmentName)}
+              title="Görseli İndir"
+              className="p-1.5 rounded text-[var(--text-secondary)] hover:text-white hover:bg-[var(--bg-elevated)] cursor-pointer"
+            >
+              <Download className="w-4 h-4" />
+            </button>
+          )}
           {onBookmark && (
             <button
               onClick={async () => {
@@ -398,20 +641,270 @@ export const MessageItem: React.FC<MessageItemProps> = ({
               <Trash2 className="w-4 h-4" />
             </button>
           )}
+          <button
+            onClick={(e) => {
+              const rect = e.currentTarget.getBoundingClientRect();
+              openMenuAtPoint(rect.left - 180, rect.bottom + 6);
+            }}
+            title="Diğer İşlemler"
+            className="p-1.5 rounded text-[var(--text-secondary)] hover:text-white hover:bg-[var(--bg-elevated)] cursor-pointer"
+          >
+            <MoreHorizontal className="w-4 h-4" />
+          </button>
         </div>
       )}
 
-      {/* Image Lightbox */}
-      {lightboxOpen && message.attachmentUrl && (
+      {/* Custom Long-Press / Context Action Sheet & Popover */}
+      {actionMenu.open && (
+        <div
+          onClick={closeMenu}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            closeMenu();
+          }}
+          className="fixed inset-0 z-50 bg-black/55 backdrop-blur-[1px]"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={
+              actionMenu.mode === 'popover'
+                ? { left: actionMenu.x, top: actionMenu.y }
+                : undefined
+            }
+            className={
+              actionMenu.mode === 'sheet'
+                ? 'fixed inset-x-0 bottom-0 bg-[#18191E] border-t border-white/10 rounded-t-3xl p-4 pb-6 shadow-2xl space-y-3 max-h-[82dvh] overflow-y-auto'
+                : 'fixed w-64 bg-[#18191E] border border-white/10 rounded-2xl p-2 shadow-2xl space-y-1.5'
+            }
+          >
+            {actionMenu.mode === 'sheet' && (
+              <div className="w-10 h-1 rounded-full bg-white/20 mx-auto mb-1" />
+            )}
+
+            {/* Message Snippet Header */}
+            <div className="px-2 py-1 flex items-center justify-between gap-2 border-b border-white/8 pb-2">
+              <div className="min-w-0">
+                <p className="text-xs font-semibold text-white truncate">{message.authorName}</p>
+                <p className="text-[11px] text-[var(--text-muted)] truncate">
+                  {message.content || (message.attachmentUrl ? 'Görsel Eki' : '')}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closeMenu}
+                className="p-1 rounded-lg text-[var(--text-muted)] hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Quick Emoji Reaction Row */}
+            <div className="grid grid-cols-6 gap-1.5 px-1 py-1">
+              {QUICK_EMOJIS.map((em) => {
+                const alreadyReacted = Boolean(message.reactions?.[em]?.includes(currentUid));
+                return (
+                  <button
+                    key={em}
+                    type="button"
+                    onClick={() => {
+                      void onToggleReaction(message, em);
+                      closeMenu();
+                    }}
+                    className={`h-10 rounded-xl text-lg flex items-center justify-center transition-colors cursor-pointer ${
+                      alreadyReacted
+                        ? 'bg-[#5865F2]/30 border border-[#5865F2]'
+                        : 'bg-[#25272E] hover:bg-[#31333C]'
+                    }`}
+                  >
+                    {em}
+                  </button>
+                );
+              })}
+            </div>
+
+            {serverEmojis.length > 0 && (
+              <div className="flex items-center gap-1.5 px-1 py-1 overflow-x-auto">
+                {serverEmojis.slice(0, 12).map((se) => {
+                  const key = `:${se.name}:`;
+                  const alreadyReacted = Boolean(message.reactions?.[key]?.includes(currentUid));
+                  return (
+                    <button
+                      key={se.id}
+                      type="button"
+                      onClick={() => {
+                        void onToggleReaction(message, key);
+                        closeMenu();
+                      }}
+                      title={key}
+                      className={`h-9 w-9 shrink-0 rounded-xl flex items-center justify-center transition-colors cursor-pointer ${
+                        alreadyReacted
+                          ? 'bg-[#5865F2]/30 border border-[#5865F2]'
+                          : 'bg-[#25272E] hover:bg-[#31333C]'
+                      }`}
+                    >
+                      <img src={se.imageUrl} alt={key} className="w-5 h-5 object-contain" />
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Actions List */}
+            <div className="space-y-1 pt-0.5 text-sm">
+              {safeAttachmentUrl && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void downloadAttachment(safeAttachmentUrl, message.attachmentName);
+                      closeMenu();
+                    }}
+                    className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-white hover:bg-[#5865F2] transition-colors cursor-pointer"
+                  >
+                    <span>Görseli İndir</span>
+                    <Download className="w-4 h-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      closeMenu();
+                      setLightboxOpen(true);
+                    }}
+                    className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-[var(--text-primary)] hover:bg-white/10 transition-colors cursor-pointer"
+                  >
+                    <span>Görseli Tam Ekran Aç</span>
+                    <Maximize2 className="w-4 h-4" />
+                  </button>
+                </>
+              )}
+
+              <button
+                type="button"
+                onClick={() => {
+                  onReply(message);
+                  closeMenu();
+                }}
+                className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-[var(--text-primary)] hover:bg-white/10 transition-colors cursor-pointer"
+              >
+                <span>Yanıtla</span>
+                <CornerUpLeft className="w-4 h-4" />
+              </button>
+
+              {isAuthor && !isBotMsg && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDraft(message.content);
+                    setEditing(true);
+                    closeMenu();
+                  }}
+                  className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-[var(--text-primary)] hover:bg-white/10 transition-colors cursor-pointer"
+                >
+                  <span>Mesajı Düzenle</span>
+                  <Pencil className="w-4 h-4" />
+                </button>
+              )}
+
+              {message.content && (
+                <button
+                  type="button"
+                  onClick={handleCopyText}
+                  className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-[var(--text-primary)] hover:bg-white/10 transition-colors cursor-pointer"
+                >
+                  <span>{copied ? 'Kopyalandı!' : 'Metni Kopyala'}</span>
+                  {copied ? <Check className="w-4 h-4 text-[#23A55A]" /> : <Copy className="w-4 h-4" />}
+                </button>
+              )}
+
+              {canPin && onTogglePin && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    void onTogglePin(message);
+                    closeMenu();
+                  }}
+                  className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-[var(--text-primary)] hover:bg-white/10 transition-colors cursor-pointer"
+                >
+                  <span>{message.pinned ? 'Sabitlemeyi Kaldır' : 'Mesajı Sabitle'}</span>
+                  <Pin className="w-4 h-4" />
+                </button>
+              )}
+
+              {onBookmark && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await onBookmark(message);
+                    setBookmarked(true);
+                    setTimeout(() => setBookmarked(false), 1500);
+                    closeMenu();
+                  }}
+                  className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-[var(--text-primary)] hover:bg-white/10 transition-colors cursor-pointer"
+                >
+                  <span>Yer İşaretine Ekle</span>
+                  <Bookmark className="w-4 h-4" />
+                </button>
+              )}
+
+              {(isAuthor || canModerate) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    closeMenu();
+                    void onDelete(message.id);
+                  }}
+                  className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-rose-400 hover:bg-rose-500 hover:text-white transition-colors cursor-pointer"
+                >
+                  <span>Mesajı Sil</span>
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Image Lightbox with Custom Download & Close Controls */}
+      {lightboxOpen && safeAttachmentUrl && (
         <div
           onClick={() => setLightboxOpen(false)}
-          className="fixed inset-0 z-50 bg-black/85 flex items-center justify-center p-6"
+          onContextMenu={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setLightboxOpen(false);
+            openMenuAtPoint(e.clientX, e.clientY);
+          }}
+          className="fixed inset-0 z-50 bg-black/88 flex flex-col items-center justify-center p-4 sm:p-6 select-none"
         >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="fixed top-4 right-4 z-50 flex items-center gap-2"
+          >
+            <button
+              type="button"
+              onClick={() => downloadAttachment(safeAttachmentUrl, message.attachmentName)}
+              className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-[#5865F2] hover:bg-[#4752C4] text-white text-xs sm:text-sm font-medium shadow-lg cursor-pointer"
+            >
+              <Download className="w-4 h-4" />
+              <span>İndir</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setLightboxOpen(false)}
+              aria-label="Kapat"
+              className="p-2 rounded-xl bg-[#1E1F24] hover:bg-[#2B2D33] text-white border border-white/10 shadow-lg cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
           <img
-            src={message.attachmentUrl}
+            src={safeAttachmentUrl}
             alt={message.attachmentName || 'Tam boyut görsel'}
             referrerPolicy="no-referrer"
-            className="max-w-full max-h-full rounded-lg shadow-2xl"
+            draggable={false}
+            onContextMenu={(e) => e.preventDefault()}
+            onClick={(e) => e.stopPropagation()}
+            className="max-w-full max-h-[86dvh] rounded-xl shadow-2xl select-none"
           />
         </div>
       )}

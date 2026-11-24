@@ -7,7 +7,7 @@ service cloud.firestore {
 
     // --- Primitive Helpers ---
     function isSignedIn() {
-      return request.auth != null && request.auth.token.email_verified == true;
+      return request.auth != null;
     }
     function isOwner(uid) {
       return isSignedIn() && request.auth.uid == uid;
@@ -197,6 +197,19 @@ service cloud.firestore {
         && data.position is int && data.position >= 0 && data.position <= 500
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
+    }
+
+    function isValidServerEmoji(data, serverId, emojiId) {
+      return data.keys().hasAll(['id', 'serverId', 'name', 'imageUrl', 'creatorId', 'creatorName', 'createdAt'])
+        && data.keys().hasOnly(['id', 'serverId', 'name', 'imageUrl', 'creatorId', 'creatorName', 'createdAt'])
+        && data.id == emojiId && isValidId(data.id)
+        && data.serverId == serverId && isValidId(data.serverId)
+        && data.name is string && data.name.size() >= 2 && data.name.size() <= 24 && data.name.matches('^[a-z0-9_]+$')
+        && data.imageUrl is string && data.imageUrl.size() >= 1 && data.imageUrl.size() <= 160000
+        && (data.imageUrl.matches('^https://.*') || data.imageUrl.matches('^data:image/(png|jpeg|jpg|webp|gif);base64,.*'))
+        && data.creatorId is string && data.creatorId.size() >= 1 && data.creatorId.size() <= 128
+        && data.creatorName is string && data.creatorName.size() >= 1 && data.creatorName.size() <= 40
+        && data.createdAt is timestamp;
     }
 
     function isValidChannelMessage(data, serverId, channelId, messageId) {
@@ -534,6 +547,18 @@ service cloud.firestore {
           allow delete: if isValidId(serverId) && isValidId(channelId) && isValidId(messageId)
             && (isOwner(existing().authorId) || isServerMod(serverId));
         }
+      }
+
+      match /emojis/{emojiId} {
+        allow get: if isValidId(serverId) && isValidId(emojiId) && isServerMember(serverId);
+        allow list: if isServerMember(serverId);
+        allow create: if isValidId(serverId) && isValidId(emojiId) && isServerMod(serverId)
+          && isValidServerEmoji(incoming(), serverId, emojiId)
+          && incoming().creatorId == request.auth.uid
+          && incoming().createdAt == request.time;
+        allow update: if false;
+        allow delete: if isValidId(serverId) && isValidId(emojiId)
+          && (isServerMod(serverId) || (isServerMember(serverId) && existing().creatorId == request.auth.uid));
       }
 
       match /voiceParticipants/{participantId} {

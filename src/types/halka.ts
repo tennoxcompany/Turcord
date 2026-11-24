@@ -26,6 +26,9 @@ export const LIMITS = {
   CHANNEL_TOPIC_MAX: 200,
   MESSAGE_MAX: 2000,
   ATTACHMENT_MAX: 280000,
+  EMOJI_NAME_MIN: 2,
+  EMOJI_NAME_MAX: 24,
+  EMOJI_DATA_MAX: 155000,
 };
 
 export interface UserConnection {
@@ -135,6 +138,16 @@ export interface ChannelDoc {
   position: number;
   createdAt?: Timestamp;
   updatedAt?: Timestamp;
+}
+
+export interface ServerEmoji {
+  id: string;
+  serverId: string;
+  name: string;
+  imageUrl: string;
+  creatorId: string;
+  creatorName: string;
+  createdAt?: Timestamp;
 }
 
 export interface ChatMessage {

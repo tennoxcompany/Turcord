@@ -54,7 +54,7 @@ export const MemberList: React.FC<MemberListProps> = ({
   }, [members, onlineUsers, currentUid]);
 
   return (
-    <aside className="w-[240px] shrink-0 bg-[var(--bg-sidebar)] border-l border-[var(--border-subtle)] overflow-y-auto px-2 py-4 space-y-5 select-none hidden md:block">
+    <aside className="w-[240px] h-full min-h-0 shrink-0 bg-[var(--bg-sidebar)] border-l border-[var(--border-subtle)] overflow-y-auto px-2 py-4 space-y-5 select-none hidden md:block">
       {groups.map((grp) => (
         <div key={grp.label} className="space-y-1">
           <h3 className="px-2 text-[11px] font-semibold tracking-wide text-[var(--text-muted)] tabular-nums">

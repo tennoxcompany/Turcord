@@ -180,6 +180,21 @@
       },
       "required": ["id", "serverId", "name", "type", "category", "topic", "position", "createdAt", "updatedAt"]
     },
+    "ServerEmoji": {
+      "title": "ServerEmoji",
+      "description": "Custom emoji uploaded to a server and usable via :name: shortcode.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "serverId": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 2, "maxLength": 24, "pattern": "^[a-z0-9_]+$" },
+        "imageUrl": { "type": "string", "minLength": 1, "maxLength": 160000 },
+        "creatorId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "creatorName": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "serverId", "name", "imageUrl", "creatorId", "creatorName", "createdAt"]
+    },
     "ChannelMessage": {
       "title": "ChannelMessage",
       "description": "Real-time message sent inside a server channel.",
@@ -391,6 +406,10 @@
     "/servers/{serverId}/channels/{channelId}/messages/{messageId}": {
       "schema": { "$ref": "#/entities/ChannelMessage" },
       "description": "Messages in a server channel."
+    },
+    "/servers/{serverId}/emojis/{emojiId}": {
+      "schema": { "$ref": "#/entities/ServerEmoji" },
+      "description": "Custom server emojis usable across server channels."
     },
     "/servers/{serverId}/voiceParticipants/{participantId}": {
       "schema": { "$ref": "#/entities/VoiceParticipant" },

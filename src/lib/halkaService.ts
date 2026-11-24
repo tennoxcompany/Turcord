@@ -30,6 +30,7 @@ import {
   type MemberRole,
   type PublicProfile,
   type ServerDoc,
+  type ServerEmoji,
   type ServerMember,
   type UserConnection,
   type UserStatus,
@@ -87,11 +88,18 @@ export async function getUserProfileByUid(uid: string): Promise<PublicProfile | 
   }
 }
 
+let pendingRegistrationProfile: { displayName?: string; username?: string } | null = null;
+
+export function setPendingRegistrationProfile(data: { displayName?: string; username?: string } | null) {
+  pendingRegistrationProfile = data;
+}
+
 export async function ensureUserProfile(user: User): Promise<PublicProfile> {
   const userPath = `users/${user.uid}`;
   try {
     const snap = await getDoc(doc(db, 'users', user.uid));
     if (snap.exists()) {
+      pendingRegistrationProfile = null;
       const data = snap.data() as PublicProfile;
       const unameSnap = await getDoc(doc(db, 'usernames', data.username));
       if (!unameSnap.exists()) {
@@ -106,14 +114,26 @@ export async function ensureUserProfile(user: User): Promise<PublicProfile> {
       return data;
     }
 
-    const base = sanitizeUsernameBase(user.email || user.displayName || 'kullanici');
+    const pending = pendingRegistrationProfile;
+    pendingRegistrationProfile = null;
+
+    const preferredUsername = pending?.username
+      ? pending.username.toLowerCase().replace(/[^a-z0-9_.]/g, '').slice(0, LIMITS.USERNAME_MAX)
+      : '';
+    const base =
+      preferredUsername.length >= LIMITS.USERNAME_MIN
+        ? preferredUsername
+        : sanitizeUsernameBase(pending?.displayName || user.email || user.displayName || 'kullanici');
     let candidate = base;
     const check = await getDoc(doc(db, 'usernames', candidate));
     if (check.exists()) {
       candidate = `${base.slice(0, 24)}_${Math.floor(1000 + Math.random() * 9000)}`;
     }
 
-    const displayName = (user.displayName || base).slice(0, LIMITS.DISPLAY_NAME_MAX);
+    const displayName = (pending?.displayName?.trim() || user.displayName || base).slice(
+      0,
+      LIMITS.DISPLAY_NAME_MAX
+    );
     const avatarUrl = (user.photoURL || '').slice(0, 1000);
 
     const profilePayload = {
@@ -711,6 +731,78 @@ export async function deleteChannel(serverId: string, channelId: string): Promis
     await deleteDoc(doc(db, 'servers', serverId, 'channels', channelId));
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, `servers/${serverId}/channels/${channelId}`);
+  }
+}
+
+export async function addServerEmoji(
+  serverId: string,
+  creator: PublicProfile,
+  input: { name: string; imageUrl: string }
+): Promise<ServerEmoji> {
+  const cleanName = input.name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, LIMITS.EMOJI_NAME_MAX);
+
+  if (cleanName.length < LIMITS.EMOJI_NAME_MIN) {
+    throw new Error('Emoji adı en az 2 karakter olmalıdır (sadece a-z, 0-9, _).');
+  }
+
+  const imageUrl = input.imageUrl.trim();
+  const isValidImage =
+    imageUrl.startsWith('https://') ||
+    /^data:image\/(png|jpeg|jpg|webp|gif);base64,/i.test(imageUrl);
+  if (!isValidImage || imageUrl.length > LIMITS.EMOJI_DATA_MAX) {
+    throw new Error('Emoji görseli geçersiz veya boyut sınırı (155 KB) aşıldı.');
+  }
+
+  const emojiId = makeId('em');
+  const colRef = collection(db, 'servers', serverId, 'emojis');
+  try {
+    const existingSnap = await getDocs(colRef);
+    if (existingSnap.size >= 50) {
+      throw new Error('Bu sunucuda maksimum 50 özel emoji sınırına ulaşıldı.');
+    }
+    const duplicate = existingSnap.docs.some((d) => (d.data() as ServerEmoji).name === cleanName);
+    if (duplicate) {
+      throw new Error(`:${cleanName}: kısa adı bu sunucuda zaten kullanılıyor.`);
+    }
+
+    const payload = {
+      id: emojiId,
+      serverId,
+      name: cleanName,
+      imageUrl,
+      creatorId: creator.uid,
+      creatorName: creator.displayName.slice(0, LIMITS.DISPLAY_NAME_MAX),
+      createdAt: serverTimestamp(),
+    };
+    await setDoc(doc(db, 'servers', serverId, 'emojis', emojiId), payload);
+    return {
+      ...payload,
+      createdAt: undefined,
+    };
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      (error.message.includes('Emoji') ||
+        error.message.includes('kısa adı') ||
+        error.message.includes('maksimum'))
+    ) {
+      throw error;
+    }
+    handleFirestoreError(error, OperationType.CREATE, `servers/${serverId}/emojis/${emojiId}`);
+  }
+}
+
+export async function deleteServerEmoji(serverId: string, emojiId: string): Promise<void> {
+  try {
+    await deleteDoc(doc(db, 'servers', serverId, 'emojis', emojiId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `servers/${serverId}/emojis/${emojiId}`);
   }
 }
 

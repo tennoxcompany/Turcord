@@ -107,7 +107,7 @@ export const VoiceStage: React.FC<VoiceStageProps> = ({
     Boolean(stream && stream.getVideoTracks().some((t) => t.readyState === 'live'));
 
   return (
-    <div className="flex-1 flex flex-col bg-[var(--bg-rail)] min-w-0">
+    <div className="flex-1 flex flex-col bg-[var(--bg-rail)] min-w-0 min-h-0 h-full overflow-hidden">
       {/* Hidden Remote Audio Sinks */}
       {Object.entries(remoteStreams).map(([uid, stream]) => (
         <RemoteAudio key={uid} stream={stream} deafened={deafened} />

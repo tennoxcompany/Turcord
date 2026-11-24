@@ -277,9 +277,9 @@ export const FriendsHome: React.FC<FriendsHomeProps> = ({
   }, [dmThreads, dmMessages, dmSearchQuery, dmSearchFilter]);
 
   return (
-    <div className="flex-1 flex min-w-0">
+    <div className="flex-1 flex min-w-0 min-h-0 h-full overflow-hidden">
       {/* Left DM Sidebar (260px Onyx Style) */}
-      <aside className="w-[256px] shrink-0 bg-[var(--bg-sidebar)] border-r border-[var(--border-subtle)] flex flex-col select-none">
+      <aside className="w-[256px] shrink-0 h-full min-h-0 bg-[var(--bg-sidebar)] border-r border-[var(--border-subtle)] flex flex-col select-none">
         {/* Mesajlar Header + Quick Actions */}
         <div className="px-3 pt-3 pb-2.5 border-b border-[var(--border-subtle)] space-y-2.5">
           <div className="flex items-center justify-between px-1">
@@ -345,7 +345,7 @@ export const FriendsHome: React.FC<FriendsHomeProps> = ({
         </div>
 
         {/* Direct Messages List */}
-        <div className="flex-1 overflow-y-auto px-2 py-3 space-y-1">
+        <div className="flex-1 min-h-0 overflow-y-auto px-2 py-3 space-y-1">
           <div className="flex items-center justify-between px-2 py-1">
             <span className="text-[11px] font-semibold tracking-wide text-[var(--text-muted)] uppercase">
               Direkt Mesajlar
@@ -512,7 +512,7 @@ export const FriendsHome: React.FC<FriendsHomeProps> = ({
 
       {/* Main Content */}
       {activeThread ? (
-        <div className="flex-1 flex flex-col min-w-0">
+        <div className="flex-1 flex flex-col min-w-0 min-h-0 h-full overflow-hidden">
           {isDmCallActive && (
             <div className="h-72 shrink-0 border-b border-[var(--border-subtle)]">
               <VoiceStage
@@ -577,7 +577,7 @@ export const FriendsHome: React.FC<FriendsHomeProps> = ({
           />
         </div>
       ) : mainSection === 'requests' ? (
-        <div className="flex-1 flex flex-col min-w-0 bg-[var(--bg-surface)]">
+        <div className="flex-1 flex flex-col min-w-0 min-h-0 h-full bg-[var(--bg-surface)]">
           <header className="h-12 shrink-0 px-4 border-b border-[var(--border-subtle)] flex items-center justify-between">
             <div className="flex items-center gap-2 font-display font-semibold text-[15px] text-white">
               <Inbox className="w-5 h-5 text-[var(--text-muted)]" />
@@ -657,7 +657,7 @@ export const FriendsHome: React.FC<FriendsHomeProps> = ({
           </div>
         </div>
       ) : (
-        <div className="flex-1 flex flex-col min-w-0 bg-[var(--bg-surface)]">
+        <div className="flex-1 flex flex-col min-w-0 min-h-0 h-full bg-[var(--bg-surface)]">
           {/* Friends Top Bar */}
           <header className="h-12 shrink-0 px-4 border-b border-[var(--border-subtle)] flex items-center gap-4 overflow-x-auto">
             <div className="flex items-center gap-2 font-display font-semibold text-[15px] text-white whitespace-nowrap shrink-0">

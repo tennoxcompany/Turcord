@@ -272,6 +272,89 @@ async function startServer() {
     res.json({ ok: true, timestamp: Date.now() });
   });
 
+  app.get('/api/gifs', async (req, res) => {
+    const q = typeof req.query.q === 'string' ? req.query.q.trim().slice(0, 60) : '';
+    const tenorKey = process.env.TENOR_API_KEY;
+    const giphyKey = process.env.GIPHY_API_KEY;
+
+    if (!tenorKey && !giphyKey) {
+      return res.json({ configured: false, results: [] });
+    }
+
+    try {
+      if (tenorKey) {
+        const endpoint = q
+          ? `https://tenor.googleapis.com/v2/search?q=${encodeURIComponent(q)}&key=${encodeURIComponent(tenorKey)}&limit=18&media_filter=tinygif,gif&contentfilter=medium`
+          : `https://tenor.googleapis.com/v2/featured?key=${encodeURIComponent(tenorKey)}&limit=18&media_filter=tinygif,gif&contentfilter=medium`;
+        const upstream = await fetch(endpoint);
+        if (!upstream.ok) {
+          return res.status(502).json({ configured: true, results: [] });
+        }
+        const payload = (await upstream.json()) as {
+          results?: Array<{
+            id: string;
+            content_description?: string;
+            media_formats?: {
+              tinygif?: { url?: string };
+              gif?: { url?: string };
+            };
+          }>;
+        };
+        const results = (payload.results || [])
+          .map((item) => {
+            const url = item.media_formats?.tinygif?.url || item.media_formats?.gif?.url || '';
+            return {
+              id: `tenor_${item.id}`,
+              title: (item.content_description || 'GIF').slice(0, 40),
+              url,
+              previewUrl: url,
+              category: 'Tepki',
+              tags: q ? [q] : ['trend'],
+              isRemote: true,
+            };
+          })
+          .filter((r) => r.url.startsWith('https://'));
+        return res.json({ configured: true, results });
+      }
+
+      const giphyEndpoint = q
+        ? `https://api.giphy.com/v1/gifs/search?api_key=${encodeURIComponent(giphyKey!)}&q=${encodeURIComponent(q)}&limit=18&rating=pg-13`
+        : `https://api.giphy.com/v1/gifs/trending?api_key=${encodeURIComponent(giphyKey!)}&limit=18&rating=pg-13`;
+      const upstream = await fetch(giphyEndpoint);
+      if (!upstream.ok) {
+        return res.status(502).json({ configured: true, results: [] });
+      }
+      const payload = (await upstream.json()) as {
+        data?: Array<{
+          id: string;
+          title?: string;
+          images?: {
+            fixed_height_small?: { url?: string };
+            fixed_height?: { url?: string };
+          };
+        }>;
+      };
+      const results = (payload.data || [])
+        .map((item) => {
+          const url = item.images?.fixed_height?.url || item.images?.fixed_height_small?.url || '';
+          const previewUrl = item.images?.fixed_height_small?.url || url;
+          return {
+            id: `giphy_${item.id}`,
+            title: (item.title || 'GIF').slice(0, 40),
+            url,
+            previewUrl,
+            category: 'Tepki',
+            tags: q ? [q] : ['trend'],
+            isRemote: true,
+          };
+        })
+        .filter((r) => r.url.startsWith('https://'));
+      return res.json({ configured: true, results });
+    } catch {
+      return res.status(502).json({ configured: true, results: [] });
+    }
+  });
+
   app.post('/api/bot/reply', async (req, res) => {
     if (!geminiClient) {
       return res.status(503).json({

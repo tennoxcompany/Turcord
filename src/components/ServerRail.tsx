@@ -26,7 +26,7 @@ export const ServerRail: React.FC<ServerRailProps> = ({
   return (
     <nav
       aria-label="Sunucular"
-      className="w-[72px] shrink-0 bg-[var(--bg-rail)] flex flex-col items-center py-3 gap-2 overflow-y-auto border-r border-[var(--border-subtle)] select-none"
+      className="w-[72px] h-full min-h-0 shrink-0 bg-[var(--bg-rail)] flex flex-col items-center py-3 gap-2 overflow-y-auto border-r border-[var(--border-subtle)] select-none"
     >
       {/* Home / Direct Messages */}
       <div className="relative group flex items-center justify-center w-full">
