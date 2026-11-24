@@ -16,6 +16,7 @@ import {
   acceptFriendRequest,
   addBookmark,
   addServerEmoji,
+  banMember,
   boostServerWithOrbs,
   createChannel,
   createGroupDmThread,
@@ -49,6 +50,7 @@ import {
   toggleChannelReaction,
   toggleDmReaction,
   togglePinMessage,
+  unbanMember,
   updateChannelSettings,
   updateMemberRole,
   updateServerSettings,
@@ -132,13 +134,18 @@ function HalkaApp() {
   const [createChannelType, setCreateChannelType] = useState<ChannelType | null>(null);
   const [serverSettingsOpen, setServerSettingsOpen] = useState(false);
   const [serverSettingsInitialTab, setServerSettingsInitialTab] = useState<
-    'general' | 'members' | 'bots' | 'emojis' | 'boost'
+    'general' | 'members' | 'bots' | 'emojis' | 'bans' | 'audit' | 'boost'
   >('general');
   const [userSettingsOpen, setUserSettingsOpen] = useState(false);
   const [shopTab, setShopTab] = useState<'shop' | 'quests' | null>(null);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [botThinking, setBotThinking] = useState(false);
   const lastVoiceAlertRef = useRef<string | null>(null);
+  const pendingNavChannelRef = useRef<{ serverId: string; channelId: string } | null>(null);
+  const [readState, setReadState] = useState<{ baselineMs: number; items: Record<string, number> }>(() => ({
+    baselineMs: Date.now(),
+    items: {},
+  }));
 
   // Determine focused channelKey for typing indicators
   const activeChannel = useMemo(
@@ -166,6 +173,31 @@ function HalkaApp() {
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', profile?.theme || 'oniks');
   }, [profile?.theme]);
+
+  // Persistent Read / Unread State per User
+  useEffect(() => {
+    if (!profile?.uid) return;
+    const key = `turcord_read_v1:${profile.uid}`;
+    try {
+      const raw = localStorage.getItem(key);
+      if (raw) {
+        const parsed = JSON.parse(raw) as { baselineMs?: number; items?: Record<string, number> };
+        if (typeof parsed.baselineMs === 'number' && parsed.items && typeof parsed.items === 'object') {
+          setReadState({ baselineMs: parsed.baselineMs, items: parsed.items });
+          return;
+        }
+      }
+    } catch {
+      // Ignore corrupt storage
+    }
+    const fresh = { baselineMs: Date.now(), items: {} as Record<string, number> };
+    setReadState(fresh);
+    try {
+      localStorage.setItem(key, JSON.stringify(fresh));
+    } catch {
+      // Ignore storage quota issues
+    }
+  }, [profile?.uid]);
 
   // 1. Auth Listener & Profile Bootstrap
   useEffect(() => {
@@ -319,6 +351,11 @@ function HalkaApp() {
         const list = snap.docs.map((d) => d.data() as ChannelDoc);
         setChannels(list);
         setActiveChannelId((prev) => {
+          const pending = pendingNavChannelRef.current;
+          if (pending && pending.serverId === activeServerId && list.some((c) => c.id === pending.channelId)) {
+            pendingNavChannelRef.current = null;
+            return pending.channelId;
+          }
           if (prev && list.some((c) => c.id === prev)) return prev;
           const firstText = list.find((c) => c.type !== 'voice') || list[0];
           return firstText ? firstText.id : null;
@@ -404,6 +441,84 @@ function HalkaApp() {
     () => friendRequests.filter((r) => r.status === 'accepted').length,
     [friendRequests]
   );
+
+  // Auto-mark active channel & active DM as read when viewed or receiving messages
+  useEffect(() => {
+    if (!profile?.uid) return;
+    let targetKey: string | null = null;
+    if (activeView === 'server' && activeChannel && activeChannel.type !== 'voice') {
+      targetKey = `ch:${activeChannel.id}`;
+    } else if (activeView === 'home' && activeDmThreadId) {
+      targetKey = `dm:${activeDmThreadId}`;
+    }
+    if (!targetKey) return;
+
+    const now = Date.now();
+    setReadState((prev) => {
+      const prevTs = prev.items[targetKey!] ?? 0;
+      if (now - prevTs < 800) return prev;
+      const next = {
+        baselineMs: prev.baselineMs,
+        items: { ...prev.items, [targetKey!]: now },
+      };
+      try {
+        localStorage.setItem(`turcord_read_v1:${profile.uid}`, JSON.stringify(next));
+      } catch {
+        // Ignore quota errors
+      }
+      return next;
+    });
+  }, [
+    profile?.uid,
+    activeView,
+    activeChannel?.id,
+    activeChannel?.type,
+    activeDmThreadId,
+    channelMessages.length,
+    dmMessages.length,
+  ]);
+
+  const unreadChannelIds = useMemo(() => {
+    const set = new Set<string>();
+    for (const ch of channels) {
+      if (ch.type === 'voice') continue;
+      if (activeView === 'server' && ch.id === activeChannelId) continue;
+      const msgMs = ch.lastMessageAt?.toMillis ? ch.lastMessageAt.toMillis() : 0;
+      if (!msgMs) continue;
+      const lastSeen = readState.items[`ch:${ch.id}`] ?? readState.baselineMs;
+      if (msgMs > lastSeen) {
+        set.add(ch.id);
+      }
+    }
+    return set;
+  }, [channels, activeView, activeChannelId, readState]);
+
+  const unreadDmIds = useMemo(() => {
+    const set = new Set<string>();
+    for (const t of dmThreads) {
+      if (activeView === 'home' && t.id === activeDmThreadId) continue;
+      const msgMs = t.lastMessageAt?.toMillis ? t.lastMessageAt.toMillis() : 0;
+      if (!msgMs) continue;
+      const lastSeen = readState.items[`dm:${t.id}`] ?? readState.baselineMs;
+      if (msgMs > lastSeen) {
+        set.add(t.id);
+      }
+    }
+    return set;
+  }, [dmThreads, activeView, activeDmThreadId, readState]);
+
+  const unreadServerIds = useMemo(() => {
+    const set = new Set<string>();
+    for (const n of notifications) {
+      if (!n.isRead && n.serverId) {
+        set.add(n.serverId);
+      }
+    }
+    if (activeView !== 'server' && activeServerId && unreadChannelIds.size > 0) {
+      set.add(activeServerId);
+    }
+    return set;
+  }, [notifications, activeView, activeServerId, unreadChannelIds]);
 
   const unreadNotificationsCount = useMemo(
     () => notifications.filter((n) => !n.isRead).length + incomingFriendRequests.length,
@@ -679,7 +794,7 @@ function HalkaApp() {
       `#${activeChannel.name}`,
       profile,
       myMemberRecord?.roleColor || '#DBDEE1',
-      payload
+      { ...payload, members }
     );
     if (payload.poll) return;
 
@@ -943,6 +1058,8 @@ function HalkaApp() {
             activeView={activeView}
             activeServerId={activeServerId}
             pendingRequestsCount={incomingFriendRequests.length}
+            hasUnreadDms={unreadDmIds.size > 0}
+            unreadServerIds={unreadServerIds}
             onSelectHome={() => {
               setActiveView('home');
               setMobileNavOpen(false);
@@ -968,6 +1085,7 @@ function HalkaApp() {
               screenSharing={rt.screenSharing}
               wsConnected={rt.wsConnected}
               unreadNotificationsCount={unreadNotificationsCount}
+              unreadChannelIds={unreadChannelIds}
               onSelectChannel={(ch) => {
                 setActiveChannelId(ch.id);
                 setMobileNavOpen(false);
@@ -1000,7 +1118,13 @@ function HalkaApp() {
                 setActiveServerId(null);
               }}
               onDeleteChannel={async (channelId) => {
-                await deleteChannel(activeServer.id, channelId);
+                const targetCh = channels.find((c) => c.id === channelId);
+                await deleteChannel(
+                  activeServer.id,
+                  channelId,
+                  { uid: profile.uid, displayName: profile.displayName },
+                  targetCh?.name
+                );
               }}
             />
           )}
@@ -1034,7 +1158,10 @@ function HalkaApp() {
             cameraOn={rt.cameraOn}
             screenSharing={rt.screenSharing}
             voiceError={rt.voiceError}
+            activeSoundboardEvent={rt.activeSoundboardEvent}
+            onBroadcastSoundboard={rt.broadcastSoundboard}
             unreadNotificationsCount={unreadNotificationsCount}
+            unreadDmIds={unreadDmIds}
             botThinking={botThinking}
             onRunBotDiagnostics={runBotDiagnostics}
             onSelectFriendsTab={() => setActiveDmThreadId(null)}
@@ -1083,6 +1210,8 @@ function HalkaApp() {
                 cameraOn={rt.cameraOn}
                 screenSharing={rt.screenSharing}
                 voiceError={rt.voiceError}
+                activeSoundboardEvent={rt.activeSoundboardEvent}
+                onBroadcastSoundboard={rt.broadcastSoundboard}
                 onJoin={() =>
                   rt.joinVoice(
                     `server:${activeServer.id}:${activeChannel.id}`,
@@ -1110,6 +1239,7 @@ function HalkaApp() {
                 currentUserDecoration={profile.avatarDecoration}
                 messages={channelMessages}
                 currentUid={profile.uid}
+                currentUsername={profile.username}
                 canModerate={canModerate}
                 canPin={canModerate}
                 serverEmojis={serverEmojis}
@@ -1144,7 +1274,14 @@ function HalkaApp() {
                   voteOnPoll('channel', activeServer.id, activeChannel.id, msg, optionIdx, profile.uid)
                 }
                 onTogglePin={(msg) =>
-                  togglePinMessage(activeServer.id, activeChannel.id, msg.id, !msg.pinned)
+                  togglePinMessage(
+                    activeServer.id,
+                    activeChannel.id,
+                    msg.id,
+                    !msg.pinned,
+                    { uid: profile.uid, displayName: profile.displayName },
+                    msg.content
+                  )
                 }
                 onBookmark={(msg) =>
                   addBookmark(profile.uid, msg, `${activeServer.name} / #${activeChannel.name}`)
@@ -1248,8 +1385,27 @@ function HalkaApp() {
             activeServer && selectedServerMember
               ? {
                   canManageRoles,
-                  onChangeRole: (role) => updateMemberRole(activeServer.id, selectedServerMember, role),
-                  onKick: () => kickMember(activeServer, selectedServerMember.uid),
+                  onChangeRole: (role) =>
+                    updateMemberRole(activeServer.id, selectedServerMember, role, {
+                      uid: profile.uid,
+                      displayName: profile.displayName,
+                    }),
+                  onKick: () =>
+                    kickMember(
+                      activeServer,
+                      selectedServerMember.uid,
+                      { uid: profile.uid, displayName: profile.displayName },
+                      selectedServerMember.displayName
+                    ),
+                  onBan: async (reason) => {
+                    await banMember(
+                      activeServer,
+                      selectedServerMember,
+                      { uid: profile.uid, displayName: profile.displayName },
+                      reason
+                    );
+                    setSelectedProfileUid(null);
+                  },
                 }
               : undefined
           }
@@ -1283,6 +1439,21 @@ function HalkaApp() {
           bookmarks={bookmarks}
           onAcceptFriend={acceptFriendRequest}
           onDeclineFriend={removeFriendOrRequest}
+          onNavigateToNotification={(n) => {
+            if (n.threadId) {
+              setActiveView('home');
+              setActiveDmThreadId(n.threadId);
+            } else if (n.serverId) {
+              if (n.channelId) {
+                pendingNavChannelRef.current = { serverId: n.serverId, channelId: n.channelId };
+              }
+              setActiveView('server');
+              setActiveServerId(n.serverId);
+              if (n.serverId === activeServerId && n.channelId) {
+                setActiveChannelId(n.channelId);
+              }
+            }
+          }}
           onClose={() => setNotificationsOpen(false)}
         />
       )}
@@ -1327,10 +1498,14 @@ function HalkaApp() {
           defaultType={createChannelType}
           onClose={() => setCreateChannelType(null)}
           onCreate={async (input) => {
-            const chId = await createChannel(activeServer.id, {
-              ...input,
-              position: channels.length,
-            });
+            const chId = await createChannel(
+              activeServer.id,
+              {
+                ...input,
+                position: channels.length,
+              },
+              { uid: profile.uid, displayName: profile.displayName }
+            );
             setActiveChannelId(chId);
           }}
         />
@@ -1343,20 +1518,62 @@ function HalkaApp() {
           channels={channels}
           serverEmojis={serverEmojis}
           myRole={myRole}
+          currentUid={profile.uid}
           userOrbs={profile.orbsBalance ?? 1500}
           initialTab={serverSettingsInitialTab}
           onClose={() => setServerSettingsOpen(false)}
-          onSave={(updates) => updateServerSettings(activeServer.id, updates)}
+          onSave={(updates) =>
+            updateServerSettings(activeServer.id, updates, {
+              uid: profile.uid,
+              displayName: profile.displayName,
+            })
+          }
           onBoostServer={() => boostServerWithOrbs(activeServer, profile)}
           onUpdateChannel={(channelId, updates) =>
-            updateChannelSettings(activeServer.id, channelId, updates)
+            updateChannelSettings(activeServer.id, channelId, updates, {
+              uid: profile.uid,
+              displayName: profile.displayName,
+            })
           }
-          onChangeRole={(m, r) => updateMemberRole(activeServer.id, m, r)}
-          onKick={(m) => kickMember(activeServer, m.uid)}
+          onChangeRole={(m, r) =>
+            updateMemberRole(activeServer.id, m, r, {
+              uid: profile.uid,
+              displayName: profile.displayName,
+            })
+          }
+          onKick={(m) =>
+            kickMember(
+              activeServer,
+              m.uid,
+              { uid: profile.uid, displayName: profile.displayName },
+              m.displayName
+            )
+          }
+          onBan={(m, reason) =>
+            banMember(
+              activeServer,
+              m,
+              { uid: profile.uid, displayName: profile.displayName },
+              reason
+            )
+          }
+          onUnban={(ban) =>
+            unbanMember(activeServer.id, ban, {
+              uid: profile.uid,
+              displayName: profile.displayName,
+            })
+          }
           onAddEmoji={async (input) => {
             await addServerEmoji(activeServer.id, profile, input);
           }}
-          onDeleteEmoji={(emojiId) => deleteServerEmoji(activeServer.id, emojiId)}
+          onDeleteEmoji={(emojiId) =>
+            deleteServerEmoji(
+              activeServer.id,
+              emojiId,
+              { uid: profile.uid, displayName: profile.displayName },
+              serverEmojis.find((e) => e.id === emojiId)?.name
+            )
+          }
           onDeleteServer={async () => {
             await deleteServer(profile.uid, activeServer.id);
             setActiveView('home');

@@ -14,18 +14,55 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import type { AvatarDecorationId, ChatMessage, ServerEmoji } from '../types/halka';
+import type { AvatarDecorationId, ChatMessage, LinkPreviewData, ServerEmoji } from '../types/halka';
 import { isSafeMediaUrl } from '../lib/gifLibrary';
 import { isOfficialBotUid } from '../lib/turcordBots';
 import { Avatar, VerifiedBotBadge } from './Avatar';
 
 const QUICK_EMOJIS = ['👍', '❤️', '😂', '🔥', '🎉', '👀'];
 
+const ogPreviewCache = new Map<string, LinkPreviewData | null>();
+const ogInFlight = new Map<string, Promise<LinkPreviewData | null>>();
+
+function fetchOgPreviewOnce(url: string): Promise<LinkPreviewData | null> {
+  if (ogPreviewCache.has(url)) {
+    return Promise.resolve(ogPreviewCache.get(url) ?? null);
+  }
+  const existing = ogInFlight.get(url);
+  if (existing) return existing;
+
+  const p = fetch(`/api/link-preview?url=${encodeURIComponent(url)}`)
+    .then(async (res) => {
+      if (!res.ok) return null;
+      const json = (await res.json()) as { preview?: LinkPreviewData | null };
+      return json.preview || null;
+    })
+    .catch(() => null)
+    .then((data) => {
+      ogPreviewCache.set(url, data);
+      ogInFlight.delete(url);
+      return data;
+    });
+
+  ogInFlight.set(url, p);
+  return p;
+}
+
+function extractFirstPreviewUrl(content: string): string | null {
+  if (!content) return null;
+  const match = /https:\/\/[^\s<>"'`]+/i.exec(content);
+  if (!match) return null;
+  const candidate = match[0].replace(/[),.!?;:]+$/, '');
+  if (/\.(png|jpe?g|gif|webp|mp4|webm)(\?.*)?$/i.test(candidate)) return null;
+  return candidate;
+}
+
 interface MessageItemProps {
   message: ChatMessage;
   grouped: boolean;
   compactMode?: boolean;
   currentUid: string;
+  currentUsername?: string;
   canModerate: boolean;
   canPin: boolean;
   serverEmojis?: ServerEmoji[];
@@ -122,10 +159,11 @@ const SpoilerText: React.FC<{ children: React.ReactNode }> = ({ children }) => {
 function renderInlineFormatting(
   text: string,
   emojiMap: Map<string, ServerEmoji>,
-  jumbo = false
+  jumbo = false,
+  currentUsername?: string
 ): React.ReactNode[] {
   const tokenRegex =
-    /(\|\|[^|]+\|\||~~[^~]+~~|\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`|https?:\/\/[^\s]+|:[a-z0-9_]{2,24}:)/g;
+    /(\|\|[^|]+\|\||~~[^~]+~~|\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`|https?:\/\/[^\s]+|:[a-z0-9_]{2,24}:|@[a-z0-9_.]{2,32})/gi;
   const parts = text.split(tokenRegex);
   return parts.map((part, idx) => {
     if (!part) return null;
@@ -137,6 +175,24 @@ function renderInlineFormatting(
         <del key={idx} className="line-through text-[var(--text-muted)]">
           {part.slice(2, -2)}
         </del>
+      );
+    }
+    if (part.startsWith('@') && part.length >= 3) {
+      const handle = part.slice(1).toLowerCase();
+      const hitsMe =
+        handle === 'everyone' ||
+        (currentUsername ? handle === currentUsername.toLowerCase() : false);
+      return (
+        <span
+          key={idx}
+          className={`px-1 py-0.5 rounded font-medium ${
+            hitsMe
+              ? 'bg-[#F0B232]/25 text-[#FDE68A]'
+              : 'bg-[#5865F2]/25 text-[#C9CDFB]'
+          }`}
+        >
+          {part}
+        </span>
       );
     }
     if (part.startsWith(':') && part.endsWith(':') && part.length >= 4) {
@@ -210,7 +266,11 @@ function isEmojiOnlyMessage(content: string, emojiMap: Map<string, ServerEmoji>)
   });
 }
 
-function renderMessageContent(content: string, emojiMap: Map<string, ServerEmoji>): React.ReactNode {
+function renderMessageContent(
+  content: string,
+  emojiMap: Map<string, ServerEmoji>,
+  currentUsername?: string
+): React.ReactNode {
   if (!content) return null;
   const jumbo = isEmojiOnlyMessage(content, emojiMap);
   const codeBlockParts = content.split(/(```[\s\S]*?```)/g);
@@ -231,21 +291,21 @@ function renderMessageContent(content: string, emojiMap: Map<string, ServerEmoji
       if (line.startsWith('# ')) {
         return (
           <h3 key={`${bIdx}-${lIdx}`} className="font-display text-lg font-bold text-white leading-snug mt-0.5">
-            {renderInlineFormatting(line.slice(2), emojiMap, false)}
+            {renderInlineFormatting(line.slice(2), emojiMap, false, currentUsername)}
           </h3>
         );
       }
       if (line.startsWith('## ')) {
         return (
           <h4 key={`${bIdx}-${lIdx}`} className="font-display text-base font-bold text-white leading-snug mt-0.5">
-            {renderInlineFormatting(line.slice(3), emojiMap, false)}
+            {renderInlineFormatting(line.slice(3), emojiMap, false, currentUsername)}
           </h4>
         );
       }
       if (line.startsWith('### ')) {
         return (
           <h5 key={`${bIdx}-${lIdx}`} className="font-display text-[15px] font-semibold text-white leading-snug mt-0.5">
-            {renderInlineFormatting(line.slice(4), emojiMap, false)}
+            {renderInlineFormatting(line.slice(4), emojiMap, false, currentUsername)}
           </h5>
         );
       }
@@ -255,13 +315,13 @@ function renderMessageContent(content: string, emojiMap: Map<string, ServerEmoji
             key={`${bIdx}-${lIdx}`}
             className="my-0.5 pl-3 border-l-2 border-[#4E5058] text-[#B5BAC1] bg-[#2B2D31]/50 rounded-r py-0.5"
           >
-            {renderInlineFormatting(line.slice(2), emojiMap, false)}
+            {renderInlineFormatting(line.slice(2), emojiMap, false, currentUsername)}
           </div>
         );
       }
       return (
         <span key={`${bIdx}-${lIdx}`} className="block min-h-[1.35rem]">
-          {renderInlineFormatting(line, emojiMap, jumbo)}
+          {renderInlineFormatting(line, emojiMap, jumbo, currentUsername)}
         </span>
       );
     });
@@ -273,6 +333,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
   grouped,
   compactMode = false,
   currentUid,
+  currentUsername,
   canModerate,
   canPin,
   serverEmojis = [],
@@ -293,6 +354,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
   const [bookmarked, setBookmarked] = useState(false);
   const [copied, setCopied] = useState(false);
   const [actionMenu, setActionMenu] = useState<ActionMenuState>({ open: false });
+  const [linkPreview, setLinkPreview] = useState<LinkPreviewData | null>(null);
 
   const longPressTimerRef = useRef<number | null>(null);
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
@@ -311,6 +373,36 @@ export const MessageItem: React.FC<MessageItemProps> = ({
     return map;
   }, [serverEmojis]);
   const safeAttachmentUrl = message.attachmentUrl && isSafeMediaUrl(message.attachmentUrl) ? message.attachmentUrl : '';
+
+  const previewUrl = React.useMemo(
+    () => (safeAttachmentUrl ? null : extractFirstPreviewUrl(message.content)),
+    [message.content, safeAttachmentUrl]
+  );
+
+  useEffect(() => {
+    if (!previewUrl) {
+      setLinkPreview(null);
+      return;
+    }
+    let cancelled = false;
+    void fetchOgPreviewOnce(previewUrl).then((data) => {
+      if (!cancelled) setLinkPreview(data);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [previewUrl]);
+
+  const isMentionedToMe = React.useMemo(() => {
+    if (isAuthor || !message.content) return false;
+    const lower = message.content.toLowerCase();
+    if (/(?:^|\s)@everyone\b/.test(lower)) return true;
+    if (currentUsername) {
+      const needle = `@${currentUsername.toLowerCase()}`;
+      if (lower.includes(needle)) return true;
+    }
+    return false;
+  }, [isAuthor, message.content, currentUsername]);
 
   const clearLongPressTimer = () => {
     if (longPressTimerRef.current !== null) {
@@ -416,8 +508,14 @@ export const MessageItem: React.FC<MessageItemProps> = ({
       onContextMenu={handleContextMenu}
       className={`group relative px-4 ${compactMode ? 'py-0.5' : 'py-1'} hover:bg-[var(--bg-hover)]/75 transition-colors select-none ${
         grouped ? 'mt-0.5' : compactMode ? 'mt-1.5 pt-0.5' : 'mt-3.5 pt-1'
-      } ${message.pinned ? 'bg-[#F0B232]/5' : ''} ${
-        isBotMsg && !grouped ? 'border-l-2 border-[#5865F2]/60' : ''
+      } ${
+        isMentionedToMe
+          ? 'bg-[#F0B232]/10 border-l-2 border-[#F0B232]'
+          : message.pinned
+          ? 'bg-[#F0B232]/5'
+          : isBotMsg && !grouped
+          ? 'border-l-2 border-[#5865F2]/60'
+          : ''
       } ${actionMenu.open ? 'bg-[#5865F2]/12' : ''}`}
     >
       {/* Reply Reference Header */}
@@ -515,12 +613,48 @@ export const MessageItem: React.FC<MessageItemProps> = ({
           ) : (
             !message.poll && (
               <div className="text-[15px] text-[var(--text-primary)] leading-[1.45] break-words">
-                {renderMessageContent(message.content, emojiMap)}
+                {renderMessageContent(message.content, emojiMap, currentUsername)}
                 {message.edited && (
                   <span className="ml-1.5 text-[10px] text-[var(--text-muted)] select-none">(düzenlendi)</span>
                 )}
               </div>
             )
+          )}
+
+          {/* OpenGraph Link Preview Embed */}
+          {linkPreview && (
+            <a
+              href={linkPreview.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-2 flex items-start justify-between gap-3 max-w-md rounded-xl bg-[var(--bg-card)] border border-[var(--border-subtle)] border-l-4 border-l-[#5865F2] p-3 hover:border-white/25 transition-colors"
+            >
+              <div className="min-w-0 flex-1 space-y-1">
+                {linkPreview.siteName && (
+                  <p className="text-[11px] font-medium text-[var(--text-muted)] truncate">
+                    {linkPreview.siteName}
+                  </p>
+                )}
+                {linkPreview.title && (
+                  <p className="text-sm font-semibold text-[#00A8FC] leading-snug line-clamp-2">
+                    {linkPreview.title}
+                  </p>
+                )}
+                {linkPreview.description && (
+                  <p className="text-xs text-[var(--text-secondary)] leading-relaxed line-clamp-2">
+                    {linkPreview.description}
+                  </p>
+                )}
+              </div>
+              {linkPreview.image && isSafeMediaUrl(linkPreview.image) && (
+                <img
+                  src={linkPreview.image}
+                  alt=""
+                  referrerPolicy="no-referrer"
+                  className="w-16 h-16 rounded-lg object-cover shrink-0 border border-[var(--border-subtle)]"
+                />
+              )}
+            </a>
           )}
 
           {/* Interactive Poll Card */}

@@ -12,6 +12,8 @@ import {
   VolumeX,
 } from 'lucide-react';
 import type { AvatarDecorationId, VoiceParticipant } from '../types/halka';
+import { getAudioPrefs, subscribeAudioPrefs } from '../lib/audioPrefs';
+import type { SoundboardEvent } from '../hooks/useRealtimeSocket';
 import { playSoundboardEffect, SOUNDBOARD_ITEMS } from '../lib/cosmetics';
 import { Avatar } from './Avatar';
 
@@ -48,6 +50,9 @@ interface RemoteAudioProps {
 
 const RemoteAudio: React.FC<RemoteAudioProps> = ({ stream, deafened }) => {
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [speakerId, setSpeakerId] = useState<string>(() => getAudioPrefs().speakerId);
+
+  useEffect(() => subscribeAudioPrefs((prefs) => setSpeakerId(prefs.speakerId)), []);
 
   useEffect(() => {
     if (audioRef.current) {
@@ -60,6 +65,13 @@ const RemoteAudio: React.FC<RemoteAudioProps> = ({ stream, deafened }) => {
       audioRef.current.muted = deafened;
     }
   }, [deafened]);
+
+  useEffect(() => {
+    const el = audioRef.current as (HTMLAudioElement & { setSinkId?: (id: string) => Promise<void> }) | null;
+    if (el && typeof el.setSinkId === 'function' && speakerId) {
+      el.setSinkId(speakerId).catch(() => {});
+    }
+  }, [speakerId, stream]);
 
   return <audio ref={audioRef} autoPlay playsInline className="hidden" />;
 };
@@ -77,6 +89,8 @@ interface VoiceStageProps {
   cameraOn: boolean;
   screenSharing: boolean;
   voiceError: string | null;
+  activeSoundboardEvent?: SoundboardEvent | null;
+  onBroadcastSoundboard?: (soundId: string) => void;
   onJoin: () => void;
   onLeave: () => void;
   onToggleMute: () => void;
@@ -98,6 +112,8 @@ export const VoiceStage: React.FC<VoiceStageProps> = ({
   cameraOn,
   screenSharing,
   voiceError,
+  activeSoundboardEvent,
+  onBroadcastSoundboard,
   onJoin,
   onLeave,
   onToggleMute,
@@ -111,6 +127,10 @@ export const VoiceStage: React.FC<VoiceStageProps> = ({
 
   const hasVideoTrack = (stream?: MediaStream | null) =>
     Boolean(stream && stream.getVideoTracks().some((t) => t.readyState === 'live'));
+
+  const activeSoundItem = activeSoundboardEvent
+    ? SOUNDBOARD_ITEMS.find((s) => s.id === activeSoundboardEvent.soundId)
+    : null;
 
   return (
     <div className="flex-1 flex flex-col bg-[var(--bg-rail)] min-w-0 min-h-0 h-full overflow-hidden">
@@ -141,6 +161,15 @@ export const VoiceStage: React.FC<VoiceStageProps> = ({
       {voiceError && (
         <div className="mx-6 mt-4 px-4 py-2.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-xs text-amber-300">
           {voiceError}
+        </div>
+      )}
+
+      {activeSoundboardEvent && activeSoundItem && (
+        <div className="mx-6 mt-3 px-4 py-2 rounded-xl bg-[#5865F2]/15 border border-[#5865F2]/40 text-xs text-white flex items-center justify-center gap-2">
+          <span className="text-base">{activeSoundItem.emoji}</span>
+          <span>
+            <strong className="font-semibold">{activeSoundboardEvent.name}</strong> "{activeSoundItem.label}" efektini çaldı
+          </span>
         </div>
       )}
 
@@ -179,13 +208,16 @@ export const VoiceStage: React.FC<VoiceStageProps> = ({
               const stream = isMe ? localStream : remoteStreams[p.uid];
               const showVideo = (p.cameraOn || p.screenSharing) && hasVideoTrack(stream);
               const isSpotlight = spotlightUid === p.uid;
+              const isSoundboardActive = activeSoundboardEvent?.uid === p.uid;
 
               return (
                 <div
                   key={p.uid}
                   onClick={() => setSpotlightUid(isSpotlight ? null : p.uid)}
                   className={`relative aspect-video rounded-2xl bg-[var(--bg-card)] overflow-hidden flex items-center justify-center cursor-pointer transition-all ${
-                    p.speaking
+                    isSoundboardActive
+                      ? 'ring-2 ring-[#5865F2]'
+                      : p.speaking
                       ? 'ring-2 ring-[#23A55A]'
                       : 'border border-[var(--border-subtle)] hover:border-[var(--text-muted)]'
                   } ${isSpotlight ? 'sm:col-span-2' : ''}`}
@@ -261,7 +293,11 @@ export const VoiceStage: React.FC<VoiceStageProps> = ({
                       key={item.id}
                       type="button"
                       onClick={() => {
-                        playSoundboardEffect(item.id);
+                        if (onBroadcastSoundboard) {
+                          onBroadcastSoundboard(item.id);
+                        } else if (!deafened) {
+                          playSoundboardEffect(item.id);
+                        }
                         setPlayingSoundId(item.id);
                         setTimeout(() => setPlayingSoundId((cur) => (cur === item.id ? null : cur)), 450);
                       }}

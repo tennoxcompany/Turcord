@@ -58,6 +58,7 @@ interface ChannelSidebarProps {
   screenSharing: boolean;
   wsConnected: boolean;
   unreadNotificationsCount?: number;
+  unreadChannelIds?: Set<string>;
   onSelectChannel: (channel: ChannelDoc) => void;
   onJoinVoiceChannel: (channel: ChannelDoc) => void;
   onLeaveVoice: () => void;
@@ -67,7 +68,7 @@ interface ChannelSidebarProps {
   onToggleScreenShare: () => void;
   onOpenInvite: () => void;
   onOpenCreateChannel: (defaultType?: 'text' | 'voice') => void;
-  onOpenServerSettings: (initialTab?: 'general' | 'members' | 'bots' | 'emojis' | 'boost') => void;
+  onOpenServerSettings: (initialTab?: 'general' | 'members' | 'bots' | 'emojis' | 'bans' | 'audit' | 'boost') => void;
   onOpenBoost?: () => void;
   onQuickStatusUpdate?: (updates: { status?: UserStatus; activity?: UserActivity }) => Promise<void>;
   onOpenUserSettings: () => void;
@@ -92,6 +93,7 @@ export const ChannelSidebar: React.FC<ChannelSidebarProps> = ({
   screenSharing,
   wsConnected,
   unreadNotificationsCount = 0,
+  unreadChannelIds,
   onSelectChannel,
   onJoinVoiceChannel,
   onLeaveVoice,
@@ -264,16 +266,25 @@ export const ChannelSidebar: React.FC<ChannelSidebarProps> = ({
               {!isCollapsed &&
                 list.map((ch) => {
                   const isActive = activeChannelId === ch.id;
+                  const isUnread = ch.type !== 'voice' && !isActive && Boolean(unreadChannelIds?.has(ch.id));
                   const roomKey = `server:${server.id}:${ch.id}`;
                   const voiceMembers = ch.type === 'voice' ? voiceChannelsState[ch.id] || [] : [];
                   const isJoinedHere = activeVoiceRoomKey === roomKey;
 
                   return (
-                    <div key={ch.id} className="space-y-0.5">
+                    <div key={ch.id} className="space-y-0.5 relative">
+                      {isUnread && (
+                        <span
+                          aria-label="Okunmamış mesajlar"
+                          className="absolute -left-2 top-1/2 -translate-y-1/2 w-1 h-2.5 rounded-r-full bg-white"
+                        />
+                      )}
                       <div
                         className={`group flex items-center justify-between rounded-lg px-2 py-1.5 transition-colors ${
                           isActive || isJoinedHere
                             ? 'bg-[var(--bg-elevated)] text-white'
+                            : isUnread
+                            ? 'text-white hover:bg-[var(--bg-hover)]'
                             : 'text-[var(--text-muted)] hover:bg-[var(--bg-hover)] hover:text-white'
                         }`}
                       >
@@ -291,11 +302,16 @@ export const ChannelSidebar: React.FC<ChannelSidebarProps> = ({
                           {ch.type === 'voice' ? (
                             <Volume2 className={`w-4 h-4 shrink-0 ${isJoinedHere ? 'text-[#23A55A]' : 'text-[var(--text-muted)]'}`} />
                           ) : ch.type === 'announcement' ? (
-                            <Megaphone className="w-4 h-4 shrink-0 text-[var(--text-muted)]" />
+                            <Megaphone className={`w-4 h-4 shrink-0 ${isUnread ? 'text-white' : 'text-[var(--text-muted)]'}`} />
                           ) : (
-                            <Hash className="w-4 h-4 shrink-0 text-[var(--text-muted)]" />
+                            <Hash className={`w-4 h-4 shrink-0 ${isUnread ? 'text-white' : 'text-[var(--text-muted)]'}`} />
                           )}
-                          <span className="text-[14px] font-medium truncate">{ch.name}</span>
+                          <span className={`text-[14px] truncate ${isUnread ? 'font-semibold text-white' : 'font-medium'}`}>
+                            {ch.name}
+                          </span>
+                          {isUnread && (
+                            <span className="w-1.5 h-1.5 rounded-full bg-white shrink-0 ml-auto" />
+                          )}
                           {ch.nsfw && (
                             <span className="px-1 py-0.2 rounded bg-rose-500/20 text-[9px] font-bold text-rose-300 shrink-0">
                               +18

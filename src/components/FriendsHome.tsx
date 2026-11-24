@@ -27,6 +27,7 @@ import type {
   UserStatus,
   VoiceParticipant,
 } from '../types/halka';
+import type { SoundboardEvent } from '../hooks/useRealtimeSocket';
 import { ACTIVITY_LABELS } from '../lib/cosmetics';
 import { isOfficialBotUid } from '../lib/turcordBots';
 import { Avatar, ClanTagBadge, VerifiedBotBadge } from './Avatar';
@@ -58,7 +59,10 @@ interface FriendsHomeProps {
   cameraOn: boolean;
   screenSharing: boolean;
   voiceError: string | null;
+  activeSoundboardEvent?: SoundboardEvent | null;
+  onBroadcastSoundboard?: (soundId: string) => void;
   unreadNotificationsCount: number;
+  unreadDmIds?: Set<string>;
   botThinking?: boolean;
   onRunBotDiagnostics?: () => void;
   onSelectFriendsTab: () => void;
@@ -113,7 +117,10 @@ export const FriendsHome: React.FC<FriendsHomeProps> = ({
   cameraOn,
   screenSharing,
   voiceError,
+  activeSoundboardEvent,
+  onBroadcastSoundboard,
   unreadNotificationsCount,
+  unreadDmIds,
   botThinking = false,
   onRunBotDiagnostics,
   onSelectFriendsTab,
@@ -379,6 +386,7 @@ export const FriendsHome: React.FC<FriendsHomeProps> = ({
               const isBot = Boolean(t.isBotThread) || isOfficialBotUid(otherUid);
               const name = t.isGroup ? t.groupName || 'Grup Sohbeti' : p?.displayName || (isBot ? 'Turcord' : 'Kullanıcı');
               const isActive = activeDmThreadId === t.id;
+              const isUnread = !isActive && Boolean(unreadDmIds?.has(t.id));
               return (
                 <button
                   key={t.id}
@@ -386,6 +394,8 @@ export const FriendsHome: React.FC<FriendsHomeProps> = ({
                   className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl transition-colors text-left cursor-pointer ${
                     isActive
                       ? 'bg-[var(--bg-elevated)] text-white'
+                      : isUnread
+                      ? 'bg-[var(--bg-card)]/70 text-white hover:bg-[var(--bg-hover)]'
                       : isBot
                       ? 'bg-[#5865F2]/8 text-[var(--text-primary)] hover:bg-[#5865F2]/15'
                       : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-white'
@@ -409,17 +419,26 @@ export const FriendsHome: React.FC<FriendsHomeProps> = ({
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center justify-between gap-1">
                       <div className="flex items-center gap-1.5 min-w-0">
-                        <p className="text-sm font-medium truncate">{name}</p>
+                        <p className={`text-sm truncate ${isUnread ? 'font-bold text-white' : 'font-medium'}`}>
+                          {name}
+                        </p>
                         {isBot && <VerifiedBotBadge />}
                       </div>
-                      {t.isGroup && (
+                      {isUnread ? (
+                        <span
+                          aria-label="Okunmamış mesaj"
+                          className="w-2 h-2 rounded-full bg-[#5865F2] shrink-0"
+                        />
+                      ) : t.isGroup ? (
                         <span className="text-[10px] text-[var(--text-muted)] tabular-nums shrink-0">
                           {t.participants.length} kişi
                         </span>
-                      )}
+                      ) : null}
                     </div>
                     {t.lastMessage && (
-                      <p className="text-[11px] text-[var(--text-muted)] truncate">{t.lastMessage}</p>
+                      <p className={`text-[11px] truncate ${isUnread ? 'text-[var(--text-primary)] font-medium' : 'text-[var(--text-muted)]'}`}>
+                        {t.lastMessage}
+                      </p>
                     )}
                   </div>
                 </button>
@@ -536,6 +555,8 @@ export const FriendsHome: React.FC<FriendsHomeProps> = ({
                 cameraOn={cameraOn}
                 screenSharing={screenSharing}
                 voiceError={voiceError}
+                activeSoundboardEvent={activeSoundboardEvent}
+                onBroadcastSoundboard={onBroadcastSoundboard}
                 onJoin={() => {}}
                 onLeave={onLeaveVoice}
                 onToggleMute={onToggleMute}
@@ -560,6 +581,7 @@ export const FriendsHome: React.FC<FriendsHomeProps> = ({
             channelKey={`dm:${activeThread.id}`}
             messages={dmMessages}
             currentUid={profile.uid}
+            currentUsername={profile.username}
             currentUserDecoration={profile.avatarDecoration}
             canModerate={Boolean(activeThread.isBotThread)}
             canPin={false}

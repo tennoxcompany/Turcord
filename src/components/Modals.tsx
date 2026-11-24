@@ -1,11 +1,13 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Activity,
+  Ban,
   Bell,
   Bot,
   Check,
   ChevronLeft,
   ChevronRight,
+  ClipboardList,
   Clock,
   Compass,
   Copy,
@@ -24,6 +26,7 @@ import {
   Mic,
   Palette,
   Plus,
+  RefreshCw,
   Search,
   Shield,
   Smile,
@@ -44,6 +47,8 @@ import type {
   ChannelType,
   MemberRole,
   PublicProfile,
+  ServerAuditLog,
+  ServerBan,
   ServerDoc,
   ServerEmoji,
   ServerMember,
@@ -51,7 +56,14 @@ import type {
   UserConnection,
   UserStatus,
 } from '../types/halka';
-import { fetchPublicServers, ROLE_LABELS, updateUserPreferences } from '../lib/halkaService';
+import {
+  fetchPublicServers,
+  fetchServerAuditLogs,
+  fetchServerBans,
+  ROLE_LABELS,
+  updateUserPreferences,
+} from '../lib/halkaService';
+import { getAudioPrefs, setAudioPrefs } from '../lib/audioPrefs';
 import {
   ACTIVITY_PRESETS,
   ANIMATED_AVATAR_PRESETS,
@@ -635,8 +647,9 @@ interface ServerSettingsModalProps {
   channels: ChannelDoc[];
   serverEmojis: ServerEmoji[];
   myRole: MemberRole;
+  currentUid?: string;
   userOrbs: number;
-  initialTab?: 'general' | 'members' | 'bots' | 'emojis' | 'boost';
+  initialTab?: 'general' | 'members' | 'bots' | 'emojis' | 'bans' | 'audit' | 'boost';
   onClose: () => void;
   onSave: (updates: {
     name: string;
@@ -654,6 +667,8 @@ interface ServerSettingsModalProps {
   ) => Promise<void>;
   onChangeRole: (member: ServerMember, role: Exclude<MemberRole, 'owner'>) => Promise<void>;
   onKick: (member: ServerMember) => Promise<void>;
+  onBan?: (member: ServerMember, reason: string) => Promise<void>;
+  onUnban?: (ban: ServerBan) => Promise<void>;
   onDeleteServer: () => Promise<void>;
   onAddEmoji: (input: { name: string; imageUrl: string }) => Promise<void>;
   onDeleteEmoji: (emojiId: string) => Promise<void>;
@@ -665,6 +680,7 @@ export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
   channels,
   serverEmojis,
   myRole,
+  currentUid,
   userOrbs,
   initialTab,
   onClose,
@@ -673,14 +689,16 @@ export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
   onUpdateChannel,
   onChangeRole,
   onKick,
+  onBan,
+  onUnban,
   onDeleteServer,
   onAddEmoji,
   onDeleteEmoji,
 }) => {
   const canManageGeneral = myRole === 'owner' || myRole === 'admin';
   const canManageMod = myRole === 'owner' || myRole === 'admin' || myRole === 'moderator';
-  const [tab, setTab] = useState<'general' | 'members' | 'bots' | 'emojis' | 'boost'>(
-    initialTab || (canManageGeneral ? 'general' : 'boost')
+  const [tab, setTab] = useState<'general' | 'members' | 'bots' | 'emojis' | 'bans' | 'audit' | 'boost'>(
+    initialTab || (canManageGeneral ? 'general' : canManageMod ? 'emojis' : 'boost')
   );
   const [name, setName] = useState(server.name);
   const [description, setDescription] = useState(server.description);
@@ -697,6 +715,18 @@ export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
   const [boosting, setBoosting] = useState(false);
   const [boostError, setBoostError] = useState<string | null>(null);
 
+  // Bans & Audit Logs state
+  const [bans, setBans] = useState<ServerBan[]>([]);
+  const [bansLoading, setBansLoading] = useState(false);
+  const [bansError, setBansError] = useState<string | null>(null);
+  const [banTargetUid, setBanTargetUid] = useState('');
+  const [banReasonInput, setBanReasonInput] = useState('');
+  const [banning, setBanning] = useState(false);
+
+  const [auditLogs, setAuditLogs] = useState<ServerAuditLog[]>([]);
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [auditFilter, setAuditFilter] = useState('');
+
   // Custom Emoji upload state
   const [emojiName, setEmojiName] = useState('');
   const [emojiImageUrl, setEmojiImageUrl] = useState('');
@@ -705,6 +735,39 @@ export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
 
   const boostCount = server.boostCount || 0;
   const boostLevel = boostCount >= 7 ? 3 : boostCount >= 3 ? 2 : boostCount >= 1 ? 1 : 0;
+
+  const loadBans = async () => {
+    setBansLoading(true);
+    setBansError(null);
+    try {
+      const list = await fetchServerBans(server.id);
+      setBans(list);
+    } catch (err) {
+      setBansError(err instanceof Error ? err.message : 'Yasaklılar yüklenemedi.');
+    } finally {
+      setBansLoading(false);
+    }
+  };
+
+  const loadAuditLogs = async () => {
+    setAuditLoading(true);
+    try {
+      const list = await fetchServerAuditLogs(server.id);
+      setAuditLogs(list);
+    } catch {
+      // Ignore transient permission errors
+    } finally {
+      setAuditLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (tab === 'bans' && canManageGeneral) {
+      void loadBans();
+    } else if (tab === 'audit' && canManageMod) {
+      void loadAuditLogs();
+    }
+  }, [tab, server.id, canManageGeneral, canManageMod]);
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -837,6 +900,28 @@ export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
             >
               <Smile className="w-3.5 h-3.5" />
               <span>Emojiler ({serverEmojis.length})</span>
+            </button>
+          )}
+          {canManageGeneral && (
+            <button
+              onClick={() => setTab('bans')}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap cursor-pointer ${
+                tab === 'bans' ? 'bg-[#5865F2] text-white' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-card)]'
+              }`}
+            >
+              <Ban className="w-3.5 h-3.5" />
+              <span>Yasaklılar</span>
+            </button>
+          )}
+          {canManageMod && (
+            <button
+              onClick={() => setTab('audit')}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap cursor-pointer ${
+                tab === 'audit' ? 'bg-[#5865F2] text-white' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-card)]'
+              }`}
+            >
+              <ClipboardList className="w-3.5 h-3.5" />
+              <span>Denetim Kaydı</span>
             </button>
           )}
           <button
@@ -1216,6 +1301,196 @@ export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
               </div>
             )}
           </div>
+        ) : tab === 'bans' && canManageGeneral ? (
+          <div className="space-y-4">
+            <p className="text-xs text-[var(--text-muted)]">
+              Yasaklanan kullanıcılar sunucudan çıkarılır ve yasağı kaldırılana kadar davet kodu veya keşfet üzerinden tekrar katılamaz.
+            </p>
+
+            {onBan && members.some((m) => m.role !== 'owner' && m.uid !== currentUid) && (
+              <div className="p-3.5 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-subtle)] space-y-2.5">
+                <p className="text-xs font-semibold text-white">Hızlı Üye Yasakla</p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <select
+                    value={banTargetUid}
+                    onChange={(e) => setBanTargetUid(e.target.value)}
+                    className="px-3 py-2 rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] text-xs text-white outline-none"
+                  >
+                    <option value="">Üye seç...</option>
+                    {members
+                      .filter((m) => m.role !== 'owner' && m.uid !== currentUid)
+                      .map((m) => (
+                        <option key={m.uid} value={m.uid}>
+                          {m.displayName} (@{m.username})
+                        </option>
+                      ))}
+                  </select>
+                  <input
+                    type="text"
+                    value={banReasonInput}
+                    onChange={(e) => setBanReasonInput(e.target.value)}
+                    placeholder="Sebep (opsiyonel)"
+                    maxLength={200}
+                    className="px-3 py-2 rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] text-xs text-white outline-none"
+                  />
+                </div>
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    disabled={!banTargetUid || banning}
+                    onClick={async () => {
+                      const target = members.find((m) => m.uid === banTargetUid);
+                      if (!target || !onBan) return;
+                      setBanning(true);
+                      setBansError(null);
+                      try {
+                        await onBan(target, banReasonInput);
+                        setBanTargetUid('');
+                        setBanReasonInput('');
+                        await loadBans();
+                      } catch (err) {
+                        setBansError(err instanceof Error ? err.message : 'Yasaklanamadı.');
+                      } finally {
+                        setBanning(false);
+                      }
+                    }}
+                    className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-xl bg-rose-500 hover:bg-rose-600 disabled:opacity-45 text-white text-xs font-medium cursor-pointer"
+                  >
+                    <Ban className="w-3.5 h-3.5" />
+                    <span>{banning ? 'Yasaklanıyor...' : 'Üyeyi Yasakla'}</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {bansError && <p className="text-xs text-rose-400">{bansError}</p>}
+
+            {bansLoading ? (
+              <p className="text-xs text-[var(--text-muted)] py-6 text-center">Yasaklı listesi yükleniyor...</p>
+            ) : bans.length === 0 ? (
+              <div className="py-8 text-center text-xs text-[var(--text-muted)]">
+                Bu sunucuda yasaklanmış kullanıcı bulunmuyor.
+              </div>
+            ) : (
+              <div className="space-y-2 max-h-72 overflow-y-auto">
+                {bans.map((b) => (
+                  <div
+                    key={b.uid}
+                    className="flex items-center justify-between gap-3 p-3 rounded-xl bg-[var(--bg-card)] border border-[var(--border-subtle)]"
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <Avatar src={b.avatarUrl} name={b.displayName} size="sm" />
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-white truncate">
+                          {b.displayName}{' '}
+                          <span className="text-xs text-[var(--text-muted)] font-normal">@{b.username}</span>
+                        </p>
+                        <p className="text-xs text-[var(--text-muted)] truncate">
+                          Sebep: {b.reason || 'Belirtilmedi'} · Yetkili: {b.bannedByName}
+                        </p>
+                      </div>
+                    </div>
+                    {onUnban && (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          await onUnban(b);
+                          setBans((prev) => prev.filter((item) => item.uid !== b.uid));
+                        }}
+                        className="px-3 py-1.5 rounded-lg bg-[var(--bg-surface)] hover:bg-[#23A55A] text-xs font-medium text-white border border-[var(--border-subtle)] cursor-pointer shrink-0 transition-colors"
+                      >
+                        Yasağı Kaldır
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : tab === 'audit' && canManageMod ? (
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <div className="flex-1 flex items-center gap-2 px-3 py-2 rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)]">
+                <Search className="w-3.5 h-3.5 text-[var(--text-muted)]" />
+                <input
+                  type="text"
+                  value={auditFilter}
+                  onChange={(e) => setAuditFilter(e.target.value)}
+                  placeholder="Eylem, yetkili veya hedef ara..."
+                  className="flex-1 bg-transparent text-xs text-white placeholder-[var(--text-muted)] outline-none"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => void loadAuditLogs()}
+                disabled={auditLoading}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[var(--bg-card)] hover:bg-[var(--bg-elevated)] border border-[var(--border-subtle)] text-xs text-white cursor-pointer"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${auditLoading ? 'animate-spin' : ''}`} />
+                <span>Yenile</span>
+              </button>
+            </div>
+
+            {auditLoading ? (
+              <p className="text-xs text-[var(--text-muted)] py-6 text-center">Denetim kayıtları yükleniyor...</p>
+            ) : (
+              (() => {
+                const fq = auditFilter.trim().toLowerCase();
+                const filtered = auditLogs.filter(
+                  (log) =>
+                    !fq ||
+                    log.action.toLowerCase().includes(fq) ||
+                    log.actorName.toLowerCase().includes(fq) ||
+                    log.targetName.toLowerCase().includes(fq) ||
+                    (log.details || '').toLowerCase().includes(fq)
+                );
+                if (filtered.length === 0) {
+                  return (
+                    <div className="py-8 text-center text-xs text-[var(--text-muted)]">
+                      Henüz eşleşen denetim kaydı yok. Kanal, rol, emoji veya yasaklama işlemleri otomatik olarak burada kayıt altına alınır.
+                    </div>
+                  );
+                }
+                return (
+                  <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
+                    {filtered.map((log) => {
+                      const timeStr =
+                        log.createdAt && typeof log.createdAt.toDate === 'function'
+                          ? log.createdAt.toDate().toLocaleString('tr-TR', {
+                              day: '2-digit',
+                              month: 'short',
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })
+                          : 'Az önce';
+                      return (
+                        <div
+                          key={log.id}
+                          className="p-3 rounded-xl bg-[var(--bg-card)] border border-[var(--border-subtle)] space-y-1"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-white">
+                              <span className="px-2 py-0.5 rounded bg-[#5865F2]/20 text-[#A5B4FC] text-[10px]">
+                                {log.action}
+                              </span>
+                              {log.targetName && <span className="truncate">{log.targetName}</span>}
+                            </span>
+                            <span className="text-[10px] text-[var(--text-muted)] shrink-0 tabular-nums">
+                              {timeStr}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-[var(--text-secondary)]">
+                            Yetkili: <strong className="text-white font-medium">{log.actorName}</strong>
+                            {log.details ? ` · ${log.details}` : ''}
+                          </p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()
+            )}
+          </div>
         ) : (
           <div className="space-y-4">
             <div className="rounded-2xl overflow-hidden border border-[#F472B6]/35 bg-[var(--bg-card)]">
@@ -1400,17 +1675,26 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   const [newConnPlatform, setNewConnPlatform] = useState<UserConnection['platform']>('Spotify');
   const [newConnHandle, setNewConnHandle] = useState('');
 
+  const initialAudioPrefs = getAudioPrefs();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedNotice, setSavedNotice] = useState(false);
   const [micLevel, setMicLevel] = useState(0);
   const [testingMic, setTestingMic] = useState(false);
+  const [loopbackTest, setLoopbackTest] = useState(false);
   const [audioInputs, setAudioInputs] = useState<MediaDeviceInfo[]>([]);
   const [audioOutputs, setAudioOutputs] = useState<MediaDeviceInfo[]>([]);
-  const [selectedMicId, setSelectedMicId] = useState('');
-  const [selectedSpeakerId, setSelectedSpeakerId] = useState('');
+  const [selectedMicId, setSelectedMicId] = useState(initialAudioPrefs.micId);
+  const [selectedSpeakerId, setSelectedSpeakerId] = useState(initialAudioPrefs.speakerId);
+  const [inputGain, setInputGain] = useState(initialAudioPrefs.inputGain);
+  const [echoCancellation, setEchoCancellation] = useState(initialAudioPrefs.echoCancellation);
+  const [autoGainControl, setAutoGainControl] = useState(initialAudioPrefs.autoGainControl);
+  const [refreshingDevices, setRefreshingDevices] = useState(false);
   const [diagSent, setDiagSent] = useState(false);
   const [copiedId, setCopiedId] = useState(false);
+
+  const testGainNodeRef = useRef<GainNode | null>(null);
+  const testLoopbackAudioRef = useRef<HTMLAudioElement | null>(null);
 
   const activeTheme: AppearanceTheme = profile.theme || 'oniks';
   const showTyping = profile.showTypingIndicator ?? true;
@@ -1419,31 +1703,75 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   const compactMode = profile.compactMode ?? false;
   const noiseSuppression = profile.noiseSuppression ?? true;
 
+  const enumerateAudioDevices = async (requestPermission = false) => {
+    if (!navigator.mediaDevices?.enumerateDevices) return;
+    setRefreshingDevices(true);
+    let tempStream: MediaStream | null = null;
+    try {
+      if (requestPermission && navigator.mediaDevices.getUserMedia) {
+        tempStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      }
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const inputs = devices.filter((d) => d.kind === 'audioinput');
+      const outputs = devices.filter((d) => d.kind === 'audiooutput');
+      setAudioInputs(inputs);
+      setAudioOutputs(outputs);
+      if (!selectedMicId && inputs[0]?.deviceId) {
+        setSelectedMicId(inputs[0].deviceId);
+        setAudioPrefs({ micId: inputs[0].deviceId });
+      }
+      if (!selectedSpeakerId && outputs[0]?.deviceId) {
+        setSelectedSpeakerId(outputs[0].deviceId);
+        setAudioPrefs({ speakerId: outputs[0].deviceId });
+      }
+    } catch {
+      if (requestPermission) {
+        setError('Ses aygıtlarını listelemek için mikrofon izni gerekli.');
+      }
+    } finally {
+      tempStream?.getTracks().forEach((t) => t.stop());
+      setRefreshingDevices(false);
+    }
+  };
+
   useEffect(() => {
-    if (subPage !== 'voice' || !navigator.mediaDevices?.enumerateDevices) return;
-    navigator.mediaDevices
-      .enumerateDevices()
-      .then((devices) => {
-        const inputs = devices.filter((d) => d.kind === 'audioinput');
-        const outputs = devices.filter((d) => d.kind === 'audiooutput');
-        setAudioInputs(inputs);
-        setAudioOutputs(outputs);
-        if (!selectedMicId && inputs[0]?.deviceId) setSelectedMicId(inputs[0].deviceId);
-        if (!selectedSpeakerId && outputs[0]?.deviceId) setSelectedSpeakerId(outputs[0].deviceId);
-      })
-      .catch(() => {});
-  }, [subPage, selectedMicId, selectedSpeakerId]);
+    if (subPage !== 'voice') return;
+    void enumerateAudioDevices(false);
+  }, [subPage]);
+
+  useEffect(() => {
+    if (testGainNodeRef.current) {
+      testGainNodeRef.current.gain.value = Math.max(0, Math.min(2, inputGain / 100));
+    }
+  }, [inputGain]);
+
+  useEffect(() => {
+    const el = testLoopbackAudioRef.current as
+      | (HTMLAudioElement & { setSinkId?: (id: string) => Promise<void> })
+      | null;
+    if (el && typeof el.setSinkId === 'function' && selectedSpeakerId) {
+      el.setSinkId(selectedSpeakerId).catch(() => {});
+    }
+  }, [selectedSpeakerId, testingMic, loopbackTest]);
 
   useEffect(() => {
     if (!testingMic) return;
     let cancelled = false;
     let stream: MediaStream | null = null;
     let ctx: AudioContext | null = null;
+    let loopbackEl: HTMLAudioElement | null = null;
     let timer = 0;
 
     navigator.mediaDevices
       .getUserMedia({
-        audio: selectedMicId ? { deviceId: { exact: selectedMicId }, noiseSuppression } : { noiseSuppression },
+        audio: selectedMicId
+          ? {
+              deviceId: { exact: selectedMicId },
+              noiseSuppression,
+              echoCancellation,
+              autoGainControl,
+            }
+          : { noiseSuppression, echoCancellation, autoGainControl },
       })
       .then((s) => {
         if (cancelled) {
@@ -1453,9 +1781,31 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         stream = s;
         ctx = new AudioContext();
         const src = ctx.createMediaStreamSource(s);
+        const gainNode = ctx.createGain();
+        gainNode.gain.value = Math.max(0, Math.min(2, inputGain / 100));
+        testGainNodeRef.current = gainNode;
+
         const analyser = ctx.createAnalyser();
         analyser.fftSize = 256;
-        src.connect(analyser);
+        src.connect(gainNode);
+        gainNode.connect(analyser);
+
+        if (loopbackTest) {
+          const dest = ctx.createMediaStreamDestination();
+          gainNode.connect(dest);
+          const audio = document.createElement('audio') as HTMLAudioElement & {
+            setSinkId?: (id: string) => Promise<void>;
+          };
+          audio.autoplay = true;
+          audio.srcObject = dest.stream;
+          if (selectedSpeakerId && typeof audio.setSinkId === 'function') {
+            audio.setSinkId(selectedSpeakerId).catch(() => {});
+          }
+          void audio.play().catch(() => {});
+          loopbackEl = audio;
+          testLoopbackAudioRef.current = audio;
+        }
+
         const data = new Uint8Array(analyser.frequencyBinCount);
         timer = window.setInterval(() => {
           analyser.getByteFrequencyData(data);
@@ -1471,11 +1821,17 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     return () => {
       cancelled = true;
       window.clearInterval(timer);
+      testGainNodeRef.current = null;
+      if (loopbackEl) {
+        loopbackEl.pause();
+        loopbackEl.srcObject = null;
+      }
+      testLoopbackAudioRef.current = null;
       stream?.getTracks().forEach((t) => t.stop());
       ctx?.close().catch(() => {});
       setMicLevel(0);
     };
-  }, [testingMic, selectedMicId, noiseSuppression]);
+  }, [testingMic, loopbackTest, selectedMicId, selectedSpeakerId, noiseSuppression, echoCancellation, autoGainControl]);
 
   const handleSaveProfile = async (e?: React.FormEvent) => {
     e?.preventDefault();
@@ -2429,13 +2785,31 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           {subPage === 'voice' && (
             <div className="space-y-4">
               <div className="p-4 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-subtle)] space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-[var(--text-muted)] uppercase">
+                    Ses Aygıtları
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => void enumerateAudioDevices(true)}
+                    disabled={refreshingDevices}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[var(--bg-surface)] hover:bg-[var(--bg-elevated)] border border-[var(--border-subtle)] text-[11px] font-medium text-white cursor-pointer"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${refreshingDevices ? 'animate-spin' : ''}`} />
+                    <span>Cihazları Yenile</span>
+                  </button>
+                </div>
+
                 <div className="space-y-1.5">
                   <label className="block text-xs font-semibold text-[var(--text-muted)] uppercase">
                     Giriş Aygıtı (Mikrofon)
                   </label>
                   <select
                     value={selectedMicId}
-                    onChange={(e) => setSelectedMicId(e.target.value)}
+                    onChange={(e) => {
+                      setSelectedMicId(e.target.value);
+                      setAudioPrefs({ micId: e.target.value });
+                    }}
                     className="w-full px-3 py-2 rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] text-xs text-white outline-none"
                   >
                     {audioInputs.length === 0 ? (
@@ -2456,7 +2830,10 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
                   </label>
                   <select
                     value={selectedSpeakerId}
-                    onChange={(e) => setSelectedSpeakerId(e.target.value)}
+                    onChange={(e) => {
+                      setSelectedSpeakerId(e.target.value);
+                      setAudioPrefs({ speakerId: e.target.value });
+                    }}
                     className="w-full px-3 py-2 rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] text-xs text-white outline-none"
                   >
                     {audioOutputs.length === 0 ? (
@@ -2471,20 +2848,78 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
                   </select>
                 </div>
 
-                <label className="flex items-center justify-between pt-2 border-t border-[var(--border-subtle)] cursor-pointer">
-                  <div>
-                    <p className="text-sm font-medium text-white">Gürültü Engelleme</p>
-                    <p className="text-xs text-[var(--text-muted)]">
-                      Arka plan klavye ve ortam sesini azaltır
-                    </p>
+                <div className="space-y-1.5 pt-2 border-t border-[var(--border-subtle)]">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-medium text-white">Giriş Sesi Seviyesi (Kazanç)</span>
+                    <span className="font-mono text-[#949CF7] tabular-nums">{inputGain}%</span>
                   </div>
                   <input
-                    type="checkbox"
-                    checked={noiseSuppression}
-                    onChange={(e) => updateUserPreferences(profile.uid, { noiseSuppression: e.target.checked })}
-                    className="w-4 h-4 accent-[#5865F2]"
+                    type="range"
+                    min={0}
+                    max={200}
+                    step={5}
+                    value={inputGain}
+                    onChange={(e) => {
+                      const val = Number(e.target.value);
+                      setInputGain(val);
+                      setAudioPrefs({ inputGain: val });
+                    }}
+                    className="w-full accent-[#5865F2] cursor-pointer"
                   />
-                </label>
+                </div>
+
+                <div className="space-y-2.5 pt-2 border-t border-[var(--border-subtle)]">
+                  <label className="flex items-center justify-between cursor-pointer">
+                    <div>
+                      <p className="text-sm font-medium text-white">Gürültü Engelleme</p>
+                      <p className="text-xs text-[var(--text-muted)]">
+                        Arka plan klavye ve ortam sesini azaltır
+                      </p>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={noiseSuppression}
+                      onChange={(e) => updateUserPreferences(profile.uid, { noiseSuppression: e.target.checked })}
+                      className="w-4 h-4 accent-[#5865F2]"
+                    />
+                  </label>
+
+                  <label className="flex items-center justify-between cursor-pointer">
+                    <div>
+                      <p className="text-sm font-medium text-white">Yankı Engelleme</p>
+                      <p className="text-xs text-[var(--text-muted)]">
+                        Hoparlör sesinin mikrofona geri dönmesini engeller
+                      </p>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={echoCancellation}
+                      onChange={(e) => {
+                        setEchoCancellation(e.target.checked);
+                        setAudioPrefs({ echoCancellation: e.target.checked });
+                      }}
+                      className="w-4 h-4 accent-[#5865F2]"
+                    />
+                  </label>
+
+                  <label className="flex items-center justify-between cursor-pointer">
+                    <div>
+                      <p className="text-sm font-medium text-white">Otomatik Ses Kontrolü (AGC)</p>
+                      <p className="text-xs text-[var(--text-muted)]">
+                        Ses yüksekliğini konuşma mesafene göre dengeler
+                      </p>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={autoGainControl}
+                      onChange={(e) => {
+                        setAutoGainControl(e.target.checked);
+                        setAudioPrefs({ autoGainControl: e.target.checked });
+                      }}
+                      className="w-4 h-4 accent-[#5865F2]"
+                    />
+                  </label>
+                </div>
               </div>
 
               <div className="p-4 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-subtle)] space-y-3">
@@ -2507,8 +2942,19 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
                     className="h-full bg-[#23A55A] transition-all duration-75"
                   />
                 </div>
+                <label className="flex items-center justify-between pt-1 cursor-pointer">
+                  <span className="text-xs text-[var(--text-secondary)]">
+                    Sesimi Geri Dinle (Loopback)
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={loopbackTest}
+                    onChange={(e) => setLoopbackTest(e.target.checked)}
+                    className="w-4 h-4 accent-[#5865F2]"
+                  />
+                </label>
                 <p className="text-xs text-[var(--text-muted)]">
-                  Konuştuğunda yeşil çubuk hareket ediyorsa mikrofonun sesli kanallar için hazırdır.
+                  Konuştuğunda yeşil çubuk hareket ediyorsa mikrofonun sesli kanallar için hazırdır. Kazanç ve cihaz seçimleri aktif görüşmelere anında uygulanır.
                 </p>
               </div>
             </div>

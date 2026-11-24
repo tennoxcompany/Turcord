@@ -10,8 +10,10 @@ import {
   Shield,
   Sparkles,
   StickyNote,
+  UserCheck,
   UserMinus,
   UserPlus,
+  UserX,
   X,
 } from 'lucide-react';
 import type { MemberRole, PublicProfile, UserMembership } from '../types/halka';
@@ -41,6 +43,7 @@ interface ProfileModalProps {
     canManageRoles: boolean;
     onChangeRole: (role: Exclude<MemberRole, 'owner'>) => Promise<void>;
     onKick: () => Promise<void>;
+    onBan?: (reason: string) => Promise<void>;
   };
   friendsCount?: number;
   memberships?: UserMembership[];
@@ -75,6 +78,9 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
   const [note, setNote] = useState('');
   const [noteSaved, setNoteSaved] = useState(false);
   const [friendSent, setFriendSent] = useState(false);
+  const [banConfirmOpen, setBanConfirmOpen] = useState(false);
+  const [banReason, setBanReason] = useState('');
+  const [banBusy, setBanBusy] = useState(false);
 
   useEffect(() => {
     if (isOfficialBot) return;
@@ -351,16 +357,66 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
                       </button>
                     ))}
                   </div>
-                  <button
-                    onClick={async () => {
-                      await moderation.onKick();
-                      onClose();
-                    }}
-                    className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 text-xs font-medium transition-colors cursor-pointer"
-                  >
-                    <UserMinus className="w-3.5 h-3.5" />
-                    <span>Sunucudan Çıkar</span>
-                  </button>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <button
+                      onClick={async () => {
+                        await moderation.onKick();
+                        onClose();
+                      }}
+                      className="flex items-center justify-center gap-1.5 py-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 text-xs font-medium transition-colors cursor-pointer"
+                    >
+                      <UserMinus className="w-3.5 h-3.5" />
+                      <span>Çıkar (Kick)</span>
+                    </button>
+                    {moderation.onBan && (
+                      <button
+                        type="button"
+                        onClick={() => setBanConfirmOpen((o) => !o)}
+                        className="flex items-center justify-center gap-1.5 py-1.5 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-400 text-xs font-medium transition-colors cursor-pointer"
+                      >
+                        <UserX className="w-3.5 h-3.5" />
+                        <span>Yasakla (Ban)</span>
+                      </button>
+                    )}
+                  </div>
+                  {banConfirmOpen && moderation.onBan && (
+                    <div className="pt-2 border-t border-[var(--border-subtle)] space-y-2">
+                      <input
+                        type="text"
+                        value={banReason}
+                        onChange={(e) => setBanReason(e.target.value)}
+                        placeholder="Yasaklama sebebi (isteğe bağlı)..."
+                        maxLength={240}
+                        className="w-full px-2.5 py-1.5 rounded-lg bg-[var(--bg-input)] border border-[var(--border-subtle)] text-xs text-white placeholder-[var(--text-muted)] outline-none"
+                      />
+                      <div className="flex items-center justify-end gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setBanConfirmOpen(false)}
+                          className="px-2.5 py-1 rounded-lg text-[11px] text-[var(--text-muted)] hover:text-white cursor-pointer"
+                        >
+                          İptal
+                        </button>
+                        <button
+                          type="button"
+                          disabled={banBusy}
+                          onClick={async () => {
+                            setBanBusy(true);
+                            try {
+                              await moderation.onBan?.(banReason);
+                              onClose();
+                            } finally {
+                              setBanBusy(false);
+                            }
+                          }}
+                          className="inline-flex items-center gap-1 px-3 py-1 rounded-lg bg-[#DA373C] hover:bg-[#B8282D] disabled:opacity-50 text-white text-[11px] font-medium cursor-pointer"
+                        >
+                          <UserCheck className="w-3 h-3" />
+                          <span>{banBusy ? 'Yasaklanıyor...' : 'Yasağı Onayla'}</span>
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

@@ -32,6 +32,8 @@ import {
   type NameplateId,
   type ProfileEffectId,
   type PublicProfile,
+  type ServerAuditLog,
+  type ServerBan,
   type ServerDoc,
   type ServerEmoji,
   type ServerMember,
@@ -427,12 +429,15 @@ export async function sendNotification(
     fromAvatar: string;
     channelLabel: string;
     preview: string;
+    serverId?: string;
+    channelId?: string;
+    threadId?: string;
   }
 ): Promise<void> {
   if (!targetUid || (targetUid === payload.fromUid && payload.type !== 'system')) return;
   const id = makeId('ntf');
   try {
-    await setDoc(doc(db, 'users', targetUid, 'notifications', id), {
+    const notifData: Record<string, unknown> = {
       id,
       type: payload.type,
       fromUid: payload.fromUid,
@@ -442,9 +447,66 @@ export async function sendNotification(
       preview: payload.preview.slice(0, 300),
       isRead: false,
       createdAt: serverTimestamp(),
-    });
+    };
+    if (payload.serverId) notifData.serverId = payload.serverId.slice(0, 64);
+    if (payload.channelId) notifData.channelId = payload.channelId.slice(0, 64);
+    if (payload.threadId) notifData.threadId = payload.threadId.slice(0, 256);
+    await setDoc(doc(db, 'users', targetUid, 'notifications', id), notifData);
   } catch {
     // Non-blocking notification failure
+  }
+}
+
+export async function logServerAudit(
+  serverId: string,
+  actor: { uid: string; displayName: string },
+  action: string,
+  targetName: string,
+  details = ''
+): Promise<void> {
+  if (!serverId || !actor?.uid) return;
+  const id = makeId('log');
+  try {
+    await setDoc(doc(db, 'servers', serverId, 'auditLogs', id), {
+      id,
+      serverId,
+      action: action.slice(0, 60),
+      actorId: actor.uid,
+      actorName: (actor.displayName || 'Yetkili').slice(0, 40),
+      targetName: (targetName || '').slice(0, 80),
+      details: (details || '').slice(0, 300),
+      createdAt: serverTimestamp(),
+    });
+  } catch {
+    // Non-blocking audit log write
+  }
+}
+
+export async function fetchServerAuditLogs(serverId: string): Promise<ServerAuditLog[]> {
+  try {
+    const q = query(
+      collection(db, 'servers', serverId, 'auditLogs'),
+      orderBy('createdAt', 'desc'),
+      limit(60)
+    );
+    const snap = await getDocs(q);
+    return snap.docs.map((d) => d.data() as ServerAuditLog);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, `servers/${serverId}/auditLogs`);
+  }
+}
+
+export async function fetchServerBans(serverId: string): Promise<ServerBan[]> {
+  try {
+    const q = query(
+      collection(db, 'servers', serverId, 'bans'),
+      orderBy('createdAt', 'desc'),
+      limit(60)
+    );
+    const snap = await getDocs(q);
+    return snap.docs.map((d) => d.data() as ServerBan);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, `servers/${serverId}/bans`);
   }
 }
 
@@ -614,6 +676,15 @@ export async function joinServer(
 ): Promise<void> {
   const path = `servers/${server.id}/members/${profile.uid}`;
   try {
+    const banSnap = await getDoc(doc(db, 'servers', server.id, 'bans', profile.uid));
+    if (banSnap.exists()) {
+      const reason = String((banSnap.data() as ServerBan).reason || '').trim();
+      throw new Error(
+        reason
+          ? `Bu sunucudan yasaklandığın için katılamazsın. Sebep: ${reason}`
+          : 'Bu sunucudan yasaklandığın için katılamazsın.'
+      );
+    }
     const existingMember = await getDoc(doc(db, 'servers', server.id, 'members', profile.uid));
     const membershipRef = doc(db, 'users', profile.uid, 'memberships', server.id);
     if (existingMember.exists()) {
@@ -700,6 +771,9 @@ export async function joinServer(
       }
     }
   } catch (error) {
+    if (error instanceof Error && error.message.includes('yasaklandığın')) {
+      throw error;
+    }
     handleFirestoreError(error, OperationType.WRITE, path);
   }
 }
@@ -754,7 +828,8 @@ export async function updateServerSettings(
     bannerColor?: string;
     isPublic: boolean;
     enabledBots?: string[];
-  }
+  },
+  actor?: { uid: string; displayName: string }
 ): Promise<void> {
   try {
     const payload: Record<string, unknown> = {
@@ -772,6 +847,9 @@ export async function updateServerSettings(
       payload.enabledBots = updates.enabledBots.slice(0, 10);
     }
     await updateDoc(doc(db, 'servers', serverId), payload);
+    if (actor) {
+      void logServerAudit(serverId, actor, 'Sunucu Ayarları Güncellendi', String(payload.name), updates.isPublic ? 'Keşfette herkese açık' : 'Davetle özel');
+    }
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, `servers/${serverId}`);
   }
@@ -801,6 +879,7 @@ export async function boostServerWithOrbs(
       updatedAt: serverTimestamp(),
     });
     await batch.commit();
+    void logServerAudit(server.id, profile, 'Sunucu Takviyelendi', server.name, `${cost} Orbs ile seviye ${nextBoostCount}`);
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, `servers/${server.id}`);
   }
@@ -827,7 +906,8 @@ export async function createChannel(
     position: number;
     slowmodeSeconds?: number;
     nsfw?: boolean;
-  }
+  },
+  actor?: { uid: string; displayName: string }
 ): Promise<string> {
   const channelId = makeId('ch');
   try {
@@ -853,6 +933,9 @@ export async function createChannel(
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
+    if (actor) {
+      void logServerAudit(serverId, actor, 'Kanal Oluşturuldu', `#${cleanName}`, `Tür: ${input.type}`);
+    }
     return channelId;
   } catch (error) {
     handleFirestoreError(error, OperationType.CREATE, `servers/${serverId}/channels/${channelId}`);
@@ -867,7 +950,8 @@ export async function updateChannelSettings(
     topic: string;
     slowmodeSeconds: number;
     nsfw: boolean;
-  }>
+  }>,
+  actor?: { uid: string; displayName: string }
 ): Promise<void> {
   try {
     const payload: Record<string, unknown> = { updatedAt: serverTimestamp() };
@@ -878,14 +962,31 @@ export async function updateChannelSettings(
     }
     if (updates.nsfw !== undefined) payload.nsfw = Boolean(updates.nsfw);
     await updateDoc(doc(db, 'servers', serverId, 'channels', channelId), payload);
+    if (actor) {
+      void logServerAudit(
+        serverId,
+        actor,
+        'Kanal Güncellendi',
+        updates.name ? `#${updates.name}` : channelId,
+        updates.topic !== undefined ? `Konu/Ayarlar güncellendi` : 'Kanal ayarları değiştirildi'
+      );
+    }
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, `servers/${serverId}/channels/${channelId}`);
   }
 }
 
-export async function deleteChannel(serverId: string, channelId: string): Promise<void> {
+export async function deleteChannel(
+  serverId: string,
+  channelId: string,
+  actor?: { uid: string; displayName: string },
+  channelName?: string
+): Promise<void> {
   try {
     await deleteDoc(doc(db, 'servers', serverId, 'channels', channelId));
+    if (actor) {
+      void logServerAudit(serverId, actor, 'Kanal Silindi', channelName ? `#${channelName}` : channelId, '');
+    }
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, `servers/${serverId}/channels/${channelId}`);
   }
@@ -938,6 +1039,7 @@ export async function addServerEmoji(
       createdAt: serverTimestamp(),
     };
     await setDoc(doc(db, 'servers', serverId, 'emojis', emojiId), payload);
+    void logServerAudit(serverId, creator, 'Özel Emoji Eklendi', `:${cleanName}:`, '');
     return {
       ...payload,
       createdAt: undefined,
@@ -955,9 +1057,17 @@ export async function addServerEmoji(
   }
 }
 
-export async function deleteServerEmoji(serverId: string, emojiId: string): Promise<void> {
+export async function deleteServerEmoji(
+  serverId: string,
+  emojiId: string,
+  actor?: { uid: string; displayName: string },
+  emojiName?: string
+): Promise<void> {
   try {
     await deleteDoc(doc(db, 'servers', serverId, 'emojis', emojiId));
+    if (actor) {
+      void logServerAudit(serverId, actor, 'Özel Emoji Silindi', emojiName ? `:${emojiName}:` : emojiId, '');
+    }
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, `servers/${serverId}/emojis/${emojiId}`);
   }
@@ -966,7 +1076,8 @@ export async function deleteServerEmoji(serverId: string, emojiId: string): Prom
 export async function updateMemberRole(
   serverId: string,
   member: ServerMember,
-  newRole: Exclude<MemberRole, 'owner'>
+  newRole: Exclude<MemberRole, 'owner'>,
+  actor?: { uid: string; displayName: string }
 ): Promise<void> {
   try {
     await updateDoc(doc(db, 'servers', serverId, 'members', member.uid), {
@@ -974,19 +1085,84 @@ export async function updateMemberRole(
       roleColor: ROLE_COLORS[newRole],
       updatedAt: serverTimestamp(),
     });
+    if (actor) {
+      void logServerAudit(
+        serverId,
+        actor,
+        'Üye Rolü Değiştirildi',
+        member.displayName,
+        `${ROLE_LABELS[member.role]} → ${ROLE_LABELS[newRole]}`
+      );
+    }
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, `servers/${serverId}/members/${member.uid}`);
   }
 }
 
-export async function kickMember(server: ServerDoc, memberUid: string): Promise<void> {
+export async function kickMember(
+  server: ServerDoc,
+  memberUid: string,
+  actor?: { uid: string; displayName: string },
+  targetName?: string
+): Promise<void> {
   try {
     const batch = writeBatch(db);
     batch.delete(doc(db, 'servers', server.id, 'members', memberUid));
     batch.delete(doc(db, 'users', memberUid, 'memberships', server.id));
     await batch.commit();
+    if (actor) {
+      void logServerAudit(server.id, actor, 'Üye Sunucudan Atıldı', targetName || memberUid, '');
+    }
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, `servers/${server.id}/members/${memberUid}`);
+  }
+}
+
+export async function banMember(
+  server: ServerDoc,
+  target: { uid: string; username: string; displayName: string; avatarUrl: string },
+  actor: { uid: string; displayName: string },
+  reason = ''
+): Promise<void> {
+  const cleanReason = reason.trim().slice(0, 300);
+  try {
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'servers', server.id, 'bans', target.uid), {
+      uid: target.uid,
+      serverId: server.id,
+      username: (target.username || 'user').slice(0, LIMITS.USERNAME_MAX),
+      displayName: (target.displayName || 'Üye').slice(0, LIMITS.DISPLAY_NAME_MAX),
+      avatarUrl: (target.avatarUrl || '').slice(0, LIMITS.AVATAR_URL_MAX),
+      reason: cleanReason,
+      bannedByUid: actor.uid,
+      bannedByName: (actor.displayName || 'Yönetici').slice(0, LIMITS.DISPLAY_NAME_MAX),
+      createdAt: serverTimestamp(),
+    });
+    batch.delete(doc(db, 'servers', server.id, 'members', target.uid));
+    batch.delete(doc(db, 'users', target.uid, 'memberships', server.id));
+    await batch.commit();
+    void logServerAudit(
+      server.id,
+      actor,
+      'Üye Yasaklandı',
+      target.displayName,
+      cleanReason || 'Sebep belirtilmedi'
+    );
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `servers/${server.id}/bans/${target.uid}`);
+  }
+}
+
+export async function unbanMember(
+  serverId: string,
+  ban: ServerBan,
+  actor: { uid: string; displayName: string }
+): Promise<void> {
+  try {
+    await deleteDoc(doc(db, 'servers', serverId, 'bans', ban.uid));
+    void logServerAudit(serverId, actor, 'Üye Yasağı Kaldırıldı', ban.displayName, `@${ban.username}`);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `servers/${serverId}/bans/${ban.uid}`);
   }
 }
 
@@ -1002,6 +1178,7 @@ export async function sendChannelMessage(
     attachmentName?: string;
     replyTo?: ChatMessage | null;
     poll?: ChatPoll;
+    members?: ServerMember[];
   }
 ): Promise<void> {
   const messageId = makeId('msg');
@@ -1045,15 +1222,68 @@ export async function sendChannelMessage(
     }
     await setDoc(doc(db, 'servers', serverId, 'channels', channelId, 'messages', messageId), docData);
 
-    if (payload.replyTo && payload.replyTo.authorId !== author.uid) {
-      sendNotification(payload.replyTo.authorId, {
+    void updateDoc(doc(db, 'servers', serverId, 'channels', channelId), {
+      lastMessageAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    }).catch(() => {});
+
+    const notifiedUids = new Set<string>([author.uid]);
+
+    if (payload.replyTo && !notifiedUids.has(payload.replyTo.authorId)) {
+      notifiedUids.add(payload.replyTo.authorId);
+      void sendNotification(payload.replyTo.authorId, {
         type: 'reply',
         fromUid: author.uid,
         fromName: author.displayName,
         fromAvatar: author.avatarUrl,
         channelLabel,
         preview: content || attachmentName || 'Yanıt verdi',
+        serverId,
+        channelId,
       });
+    }
+
+    if (content && payload.members && payload.members.length > 0) {
+      const mentionTokens = new Set<string>();
+      const regex = /(?:^|\s)@([a-z0-9_.]+)/gi;
+      let match: RegExpExecArray | null;
+      while ((match = regex.exec(content)) !== null) {
+        mentionTokens.add(match[1].toLowerCase());
+      }
+
+      if (mentionTokens.has('everyone')) {
+        for (const member of payload.members.slice(0, 25)) {
+          if (notifiedUids.has(member.uid)) continue;
+          notifiedUids.add(member.uid);
+          void sendNotification(member.uid, {
+            type: 'mention',
+            fromUid: author.uid,
+            fromName: author.displayName,
+            fromAvatar: author.avatarUrl,
+            channelLabel,
+            preview: content,
+            serverId,
+            channelId,
+          });
+        }
+      } else if (mentionTokens.size > 0) {
+        for (const member of payload.members) {
+          if (notifiedUids.has(member.uid)) continue;
+          if (mentionTokens.has(member.username.toLowerCase())) {
+            notifiedUids.add(member.uid);
+            void sendNotification(member.uid, {
+              type: 'mention',
+              fromUid: author.uid,
+              fromName: author.displayName,
+              fromAvatar: author.avatarUrl,
+              channelLabel,
+              preview: content,
+              serverId,
+              channelId,
+            });
+          }
+        }
+      }
     }
   } catch (error) {
     handleFirestoreError(error, OperationType.CREATE, `servers/${serverId}/channels/${channelId}/messages/${messageId}`);
@@ -1122,13 +1352,24 @@ export async function togglePinMessage(
   serverId: string,
   channelId: string,
   messageId: string,
-  pinned: boolean
+  pinned: boolean,
+  actor?: { uid: string; displayName: string },
+  preview?: string
 ): Promise<void> {
   try {
     await updateDoc(doc(db, 'servers', serverId, 'channels', channelId, 'messages', messageId), {
       pinned,
       updatedAt: serverTimestamp(),
     });
+    if (actor) {
+      void logServerAudit(
+        serverId,
+        actor,
+        pinned ? 'Mesaj Sabitlendi' : 'Sabit Kaldırıldı',
+        (preview || messageId).slice(0, 80),
+        ''
+      );
+    }
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, `servers/${serverId}/channels/${channelId}/messages/${messageId}`);
   }
@@ -1642,6 +1883,10 @@ export async function sendBotChannelMessage(
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
+    void updateDoc(doc(db, 'servers', serverId, 'channels', channelId), {
+      lastMessageAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    }).catch(() => {});
   } catch (error) {
     handleFirestoreError(error, OperationType.CREATE, `servers/${serverId}/channels/${channelId}/messages/${messageId}`);
   }

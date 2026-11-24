@@ -7,6 +7,8 @@ interface ServerRailProps {
   activeView: 'home' | 'server';
   activeServerId: string | null;
   pendingRequestsCount: number;
+  hasUnreadDms?: boolean;
+  unreadServerIds?: Set<string>;
   onSelectHome: () => void;
   onSelectServer: (serverId: string) => void;
   onOpenCreateServer: () => void;
@@ -18,6 +20,8 @@ export const ServerRail: React.FC<ServerRailProps> = ({
   activeView,
   activeServerId,
   pendingRequestsCount,
+  hasUnreadDms = false,
+  unreadServerIds,
   onSelectHome,
   onSelectServer,
   onOpenCreateServer,
@@ -32,7 +36,7 @@ export const ServerRail: React.FC<ServerRailProps> = ({
       <div className="relative group flex items-center justify-center w-full">
         <span
           className={`absolute left-0 w-1 rounded-r-full bg-white transition-all duration-150 ${
-            activeView === 'home' ? 'h-10' : 'h-0 group-hover:h-5'
+            activeView === 'home' ? 'h-10' : hasUnreadDms ? 'h-2.5 group-hover:h-5' : 'h-0 group-hover:h-5'
           }`}
         />
         <button
@@ -46,11 +50,13 @@ export const ServerRail: React.FC<ServerRailProps> = ({
           }`}
         >
           <MessageCircle className="w-6 h-6" />
-          {pendingRequestsCount > 0 && (
+          {pendingRequestsCount > 0 ? (
             <span className="absolute -bottom-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 rounded-full bg-[#F23F43] text-white text-[11px] font-bold flex items-center justify-center border-2 border-[var(--bg-rail)] tabular-nums">
               {pendingRequestsCount}
             </span>
-          )}
+          ) : hasUnreadDms && activeView !== 'home' ? (
+            <span className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full bg-[#5865F2] border-2 border-[var(--bg-rail)]" />
+          ) : null}
         </button>
       </div>
 
@@ -60,11 +66,12 @@ export const ServerRail: React.FC<ServerRailProps> = ({
       <div className="flex flex-col items-center gap-2 w-full">
         {memberships.map((m) => {
           const isActive = activeView === 'server' && activeServerId === m.serverId;
+          const isUnread = !isActive && Boolean(unreadServerIds?.has(m.serverId));
           return (
             <div key={m.serverId} className="relative group flex items-center justify-center w-full">
               <span
                 className={`absolute left-0 w-1 rounded-r-full bg-white transition-all duration-150 ${
-                  isActive ? 'h-10' : 'h-0 group-hover:h-5'
+                  isActive ? 'h-10' : isUnread ? 'h-2.5 group-hover:h-5' : 'h-0 group-hover:h-5'
                 }`}
               />
               <button
@@ -75,6 +82,8 @@ export const ServerRail: React.FC<ServerRailProps> = ({
                 className={`w-12 h-12 flex items-center justify-center text-lg font-bold font-display transition-all duration-150 cursor-pointer ${
                   isActive
                     ? 'rounded-2xl text-white'
+                    : isUnread
+                    ? 'rounded-2xl bg-[var(--bg-card)] text-white hover:text-white'
                     : 'rounded-3xl bg-[var(--bg-card)] text-[var(--text-secondary)] hover:rounded-2xl hover:text-white'
                 }`}
               >

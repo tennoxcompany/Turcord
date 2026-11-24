@@ -131,7 +131,7 @@ service cloud.firestore {
 
     function isValidUserNotification(data, notifId) {
       return data.keys().hasAll(['id', 'type', 'fromUid', 'fromName', 'fromAvatar', 'channelLabel', 'preview', 'isRead', 'createdAt'])
-        && data.keys().hasOnly(['id', 'type', 'fromUid', 'fromName', 'fromAvatar', 'channelLabel', 'preview', 'isRead', 'createdAt'])
+        && data.keys().hasOnly(['id', 'type', 'fromUid', 'fromName', 'fromAvatar', 'channelLabel', 'preview', 'serverId', 'channelId', 'threadId', 'isRead', 'createdAt'])
         && data.id == notifId && isValidId(data.id)
         && data.type in ['mention', 'reply', 'system']
         && data.fromUid is string && data.fromUid.size() >= 1 && data.fromUid.size() <= 128
@@ -139,6 +139,9 @@ service cloud.firestore {
         && isSafeMediaStr(data.fromAvatar, 12000)
         && data.channelLabel is string && data.channelLabel.size() <= 80
         && data.preview is string && data.preview.size() <= 300
+        && (!('serverId' in data) || (data.serverId is string && data.serverId.size() <= 64))
+        && (!('channelId' in data) || (data.channelId is string && data.channelId.size() <= 64))
+        && (!('threadId' in data) || (data.threadId is string && data.threadId.size() <= 256))
         && data.isRead is bool
         && data.createdAt is timestamp;
     }
@@ -218,7 +221,7 @@ service cloud.firestore {
 
     function isValidChannel(data, serverId, channelId) {
       return data.keys().hasAll(['id', 'serverId', 'name', 'type', 'category', 'topic', 'position', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['id', 'serverId', 'name', 'type', 'category', 'topic', 'position', 'slowmodeSeconds', 'nsfw', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'serverId', 'name', 'type', 'category', 'topic', 'position', 'slowmodeSeconds', 'nsfw', 'lastMessageAt', 'createdAt', 'updatedAt'])
         && data.id == channelId && isValidId(data.id)
         && data.serverId == serverId && isValidId(data.serverId)
         && data.name is string && data.name.size() >= 1 && data.name.size() <= 50
@@ -228,6 +231,7 @@ service cloud.firestore {
         && data.position is int && data.position >= 0 && data.position <= 500
         && (!('slowmodeSeconds' in data) || (data.slowmodeSeconds is int && data.slowmodeSeconds >= 0 && data.slowmodeSeconds <= 300))
         && (!('nsfw' in data) || (data.nsfw is bool))
+        && (!('lastMessageAt' in data) || data.lastMessageAt is timestamp)
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -362,7 +366,7 @@ service cloud.firestore {
         && data.roomKey is string && data.roomKey.size() >= 1 && data.roomKey.size() <= 160
         && data.fromUid is string && data.fromUid.size() >= 1 && data.fromUid.size() <= 128
         && data.targetUid is string && data.targetUid.size() >= 1 && data.targetUid.size() <= 128
-        && data.type in ['offer', 'answer', 'ice']
+        && data.type in ['offer', 'answer', 'ice', 'soundboard']
         && data.payload is string && data.payload.size() <= 20000
         && data.createdAt is timestamp;
     }
@@ -378,6 +382,41 @@ service cloud.firestore {
         && data.video is bool
         && data.status in ['ringing', 'declined']
         && data.createdAt is timestamp;
+    }
+
+    function isValidServerAuditLog(data, serverId, logId) {
+      return data.keys().hasAll(['id', 'serverId', 'action', 'actorId', 'actorName', 'targetName', 'details', 'createdAt'])
+        && data.keys().hasOnly(['id', 'serverId', 'action', 'actorId', 'actorName', 'targetName', 'details', 'createdAt'])
+        && data.id == logId && isValidId(data.id)
+        && data.serverId == serverId && isValidId(data.serverId)
+        && data.action is string && data.action.size() >= 1 && data.action.size() <= 60
+        && data.actorId is string && data.actorId.size() >= 1 && data.actorId.size() <= 128
+        && data.actorName is string && data.actorName.size() >= 1 && data.actorName.size() <= 40
+        && data.targetName is string && data.targetName.size() <= 80
+        && data.details is string && data.details.size() <= 300
+        && data.createdAt is timestamp;
+    }
+
+    function isValidServerBan(data, serverId, banUid) {
+      return data.keys().hasAll(['uid', 'serverId', 'username', 'displayName', 'avatarUrl', 'reason', 'bannedByUid', 'bannedByName', 'createdAt'])
+        && data.keys().hasOnly(['uid', 'serverId', 'username', 'displayName', 'avatarUrl', 'reason', 'bannedByUid', 'bannedByName', 'createdAt'])
+        && data.uid == banUid && isValidId(data.uid)
+        && data.serverId == serverId && isValidId(data.serverId)
+        && data.username is string && data.username.size() >= 2 && data.username.size() <= 32
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 40
+        && isSafeMediaStr(data.avatarUrl, 12000)
+        && data.reason is string && data.reason.size() <= 300
+        && data.bannedByUid is string && data.bannedByUid.size() >= 1 && data.bannedByUid.size() <= 128
+        && data.bannedByName is string && data.bannedByName.size() >= 1 && data.bannedByName.size() <= 40
+        && data.createdAt is timestamp;
+    }
+
+    function isValidTypingStatus(data, userId) {
+      return data.keys().hasAll(['uid', 'displayName', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'displayName', 'updatedAt'])
+        && data.uid == userId && isValidId(data.uid)
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 40
+        && data.updatedAt is timestamp;
     }
 
     // --- Collection Rules ---
@@ -520,6 +559,7 @@ service cloud.firestore {
           && isValidServerMember(incoming(), serverId, memberId)
           && incoming().joinedAt == request.time && incoming().updatedAt == request.time
           && serverExists(serverId)
+          && !exists(/databases/$(database)/documents/servers/$(serverId)/bans/$(request.auth.uid))
           && (
             (getServer(serverId).ownerId == request.auth.uid && incoming().role == 'owner') ||
             (
@@ -551,13 +591,16 @@ service cloud.firestore {
         allow create: if isValidId(serverId) && isValidId(channelId) && isServerMod(serverId)
           && isValidChannel(incoming(), serverId, channelId)
           && incoming().createdAt == request.time && incoming().updatedAt == request.time;
-        allow update: if isValidId(serverId) && isValidId(channelId) && isServerMod(serverId)
+        allow update: if isValidId(serverId) && isValidId(channelId)
           && isValidChannel(incoming(), serverId, channelId)
           && incoming().id == existing().id
           && incoming().serverId == existing().serverId
           && incoming().createdAt == existing().createdAt
           && incoming().updatedAt == request.time
-          && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'type', 'category', 'topic', 'position', 'slowmodeSeconds', 'nsfw', 'updatedAt']);
+          && (
+            (isServerMod(serverId) && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'type', 'category', 'topic', 'position', 'slowmodeSeconds', 'nsfw', 'updatedAt'])) ||
+            (isServerMember(serverId) && incoming().diff(existing()).affectedKeys().hasOnly(['lastMessageAt', 'updatedAt']) && incoming().lastMessageAt == request.time)
+          );
         allow delete: if isValidId(serverId) && isValidId(channelId) && isServerMod(serverId);
 
         match /messages/{messageId} {
@@ -565,6 +608,7 @@ service cloud.firestore {
           allow list: if isServerMember(serverId);
           allow create: if isValidId(serverId) && isValidId(channelId) && isValidId(messageId) && isServerMember(serverId)
             && isValidChannelMessage(incoming(), serverId, channelId, messageId)
+            && (get(/databases/$(database)/documents/servers/$(serverId)/channels/$(channelId)).data.type != 'announcement' || isServerMod(serverId))
             && (
               (incoming().authorId == request.auth.uid && (!('isBot' in incoming()) || incoming().isBot == false)) ||
               (incoming().authorId in ['turcord_bot', 'mod_bot', 'music_bot'] && ('isBot' in incoming()) && incoming().isBot == true)
@@ -588,6 +632,16 @@ service cloud.firestore {
           allow delete: if isValidId(serverId) && isValidId(channelId) && isValidId(messageId)
             && (isOwner(existing().authorId) || isServerMod(serverId));
         }
+
+        match /typing/{userId} {
+          allow get: if isValidId(serverId) && isValidId(channelId) && isValidId(userId) && isServerMember(serverId);
+          allow list: if isServerMember(serverId);
+          allow create, update: if isOwner(userId) && isValidId(serverId) && isValidId(channelId) && isValidId(userId)
+            && isServerMember(serverId)
+            && isValidTypingStatus(incoming(), userId)
+            && incoming().updatedAt == request.time;
+          allow delete: if isOwner(userId) && isValidId(serverId) && isValidId(channelId) && isValidId(userId);
+        }
       }
 
       match /emojis/{emojiId} {
@@ -600,6 +654,28 @@ service cloud.firestore {
         allow update: if false;
         allow delete: if isValidId(serverId) && isValidId(emojiId)
           && (isServerMod(serverId) || (isServerMember(serverId) && existing().creatorId == request.auth.uid));
+      }
+
+      match /auditLogs/{logId} {
+        allow get: if isValidId(serverId) && isValidId(logId) && isServerMember(serverId);
+        allow list: if isServerMember(serverId);
+        allow create: if isValidId(serverId) && isValidId(logId) && isServerMember(serverId)
+          && isValidServerAuditLog(incoming(), serverId, logId)
+          && incoming().actorId == request.auth.uid
+          && incoming().createdAt == request.time;
+        allow update, delete: if false;
+      }
+
+      match /bans/{banUid} {
+        allow get: if isSignedIn() && isValidId(serverId) && isValidId(banUid) && (isServerAdmin(serverId) || isOwner(banUid));
+        allow list: if isServerAdmin(serverId);
+        allow create: if isValidId(serverId) && isValidId(banUid) && isServerAdmin(serverId)
+          && serverExists(serverId) && banUid != getServer(serverId).ownerId
+          && isValidServerBan(incoming(), serverId, banUid)
+          && incoming().bannedByUid == request.auth.uid
+          && incoming().createdAt == request.time;
+        allow update: if false;
+        allow delete: if isValidId(serverId) && isValidId(banUid) && isServerAdmin(serverId);
       }
 
       match /voiceParticipants/{participantId} {
@@ -715,6 +791,16 @@ service cloud.firestore {
           && incoming().updatedAt == request.time;
         allow delete: if isDmParticipant(threadId) && isValidId(threadId) && isValidId(participantId)
           && existing().uid == request.auth.uid;
+      }
+
+      match /typing/{userId} {
+        allow get: if isValidId(threadId) && isValidId(userId) && isDmParticipant(threadId);
+        allow list: if isDmParticipant(threadId);
+        allow create, update: if isOwner(userId) && isValidId(threadId) && isValidId(userId)
+          && isDmParticipant(threadId)
+          && isValidTypingStatus(incoming(), userId)
+          && incoming().updatedAt == request.time;
+        allow delete: if isOwner(userId) && isValidId(threadId) && isValidId(userId);
       }
 
       match /voiceSignals/{signalId} {

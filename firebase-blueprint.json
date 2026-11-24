@@ -85,6 +85,9 @@
         "fromAvatar": { "type": "string", "maxLength": 12000 },
         "channelLabel": { "type": "string", "maxLength": 80 },
         "preview": { "type": "string", "maxLength": 300 },
+        "serverId": { "type": "string", "maxLength": 64 },
+        "channelId": { "type": "string", "maxLength": 64 },
+        "threadId": { "type": "string", "maxLength": 256 },
         "isRead": { "type": "boolean" },
         "createdAt": { "type": "string", "format": "date-time" }
       },
@@ -192,6 +195,7 @@
         "position": { "type": "integer" },
         "slowmodeSeconds": { "type": "integer" },
         "nsfw": { "type": "boolean" },
+        "lastMessageAt": { "type": "string", "format": "date-time" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -346,7 +350,7 @@
         "roomKey": { "type": "string", "minLength": 1, "maxLength": 160 },
         "fromUid": { "type": "string", "minLength": 1, "maxLength": 128 },
         "targetUid": { "type": "string", "minLength": 1, "maxLength": 128 },
-        "type": { "type": "string", "enum": ["offer", "answer", "ice"] },
+        "type": { "type": "string", "enum": ["offer", "answer", "ice", "soundboard"] },
         "payload": { "type": "string", "maxLength": 20000 },
         "createdAt": { "type": "string", "format": "date-time" }
       },
@@ -367,6 +371,50 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["id", "fromUid", "fromName", "fromAvatar", "roomKey", "video", "status", "createdAt"]
+    },
+    "ServerAuditLog": {
+      "title": "ServerAuditLog",
+      "description": "Immutable moderation and server governance audit log entry.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "serverId": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "action": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "actorId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "actorName": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "targetName": { "type": "string", "maxLength": 80 },
+        "details": { "type": "string", "maxLength": 300 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "serverId", "action", "actorId", "actorName", "targetName", "details", "createdAt"]
+    },
+    "ServerBan": {
+      "title": "ServerBan",
+      "description": "Server ban record preventing banned users from re-joining.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "serverId": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "username": { "type": "string", "minLength": 2, "maxLength": 32 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "avatarUrl": { "type": "string", "maxLength": 12000 },
+        "reason": { "type": "string", "maxLength": 300 },
+        "bannedByUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "bannedByName": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "serverId", "username", "displayName", "avatarUrl", "reason", "bannedByUid", "bannedByName", "createdAt"]
+    },
+    "TypingStatus": {
+      "title": "TypingStatus",
+      "description": "Ephemeral user typing indicator inside a channel or DM thread.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "displayName", "updatedAt"]
     }
   },
   "firestore": {
@@ -426,9 +474,21 @@
       "schema": { "$ref": "#/entities/ChannelMessage" },
       "description": "Messages in a server channel."
     },
+    "/servers/{serverId}/channels/{channelId}/typing/{userId}": {
+      "schema": { "$ref": "#/entities/TypingStatus" },
+      "description": "Ephemeral typing indicator in a server channel."
+    },
     "/servers/{serverId}/emojis/{emojiId}": {
       "schema": { "$ref": "#/entities/ServerEmoji" },
       "description": "Custom server emojis usable across server channels."
+    },
+    "/servers/{serverId}/auditLogs/{logId}": {
+      "schema": { "$ref": "#/entities/ServerAuditLog" },
+      "description": "Server governance and moderation audit logs."
+    },
+    "/servers/{serverId}/bans/{banUid}": {
+      "schema": { "$ref": "#/entities/ServerBan" },
+      "description": "Banned user records preventing server rejoin."
     },
     "/servers/{serverId}/voiceParticipants/{participantId}": {
       "schema": { "$ref": "#/entities/VoiceParticipant" },
@@ -449,6 +509,10 @@
     "/dmThreads/{threadId}/messages/{messageId}": {
       "schema": { "$ref": "#/entities/DmMessage" },
       "description": "Messages in a DM or Group DM thread."
+    },
+    "/dmThreads/{threadId}/typing/{userId}": {
+      "schema": { "$ref": "#/entities/TypingStatus" },
+      "description": "Ephemeral typing indicator in a DM thread."
     },
     "/dmThreads/{threadId}/voiceParticipants/{participantId}": {
       "schema": { "$ref": "#/entities/VoiceParticipant" },

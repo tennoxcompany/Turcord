@@ -5,6 +5,8 @@ import path from 'path';
 import fs from 'fs';
 import { WebSocketServer, WebSocket } from 'ws';
 import { fileURLToPath } from 'url';
+import dns from 'dns';
+import net from 'net';
 import { GoogleGenAI } from '@google/genai';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -355,6 +357,216 @@ async function startServer() {
     }
   });
 
+  // SSRF-hardened OpenGraph link preview endpoint
+  const linkPreviewCache = new Map<string, { expiresAt: number; data: { url: string; title: string; description: string; image: string; siteName: string } | null }>();
+
+  function isPrivateOrReservedIpv4(ip: string): boolean {
+    const parts = ip.split('.').map((p) => Number(p));
+    if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return true;
+    const [a, b] = parts;
+    if (a === 0 || a === 10 || a === 127) return true;
+    if (a === 169 && b === 254) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 100 && b >= 64 && b <= 127) return true;
+    if (a >= 224) return true;
+    return false;
+  }
+
+  function isPrivateOrReservedIp(ip: string): boolean {
+    const clean = ip.toLowerCase().trim();
+    if (net.isIPv4(clean)) return isPrivateOrReservedIpv4(clean);
+    if (!net.isIPv6(clean)) return true;
+    if (clean === '::' || clean === '::1') return true;
+    if (clean.startsWith('::ffff:')) {
+      const mapped = clean.slice('::ffff:'.length);
+      if (net.isIPv4(mapped)) return isPrivateOrReservedIpv4(mapped);
+    }
+    const firstSegment = clean.split(':')[0] || '';
+    if (firstSegment.startsWith('fc') || firstSegment.startsWith('fd')) return true;
+    if (firstSegment.startsWith('fe8') || firstSegment.startsWith('fe9') || firstSegment.startsWith('fea') || firstSegment.startsWith('feb')) return true;
+    if (firstSegment.startsWith('ff')) return true;
+    return false;
+  }
+
+  async function validateExternalHttpUrl(rawUrl: string): Promise<URL | null> {
+    let parsed: URL;
+    try {
+      parsed = new URL(rawUrl);
+    } catch {
+      return null;
+    }
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return null;
+    if (parsed.username || parsed.password) return null;
+    if (parsed.port && parsed.port !== '80' && parsed.port !== '443') return null;
+    const host = parsed.hostname.toLowerCase();
+    if (!host || host === 'localhost' || host.endsWith('.local') || host.endsWith('.internal')) return null;
+
+    if (net.isIP(host)) {
+      if (isPrivateOrReservedIp(host)) return null;
+      return parsed;
+    }
+
+    try {
+      const records = await dns.promises.lookup(host, { all: true });
+      if (!records.length) return null;
+      for (const rec of records) {
+        if (isPrivateOrReservedIp(rec.address)) return null;
+      }
+      return parsed;
+    } catch {
+      return null;
+    }
+  }
+
+  function decodeHtmlEntities(input: string): string {
+    return input
+      .replace(/&amp;/gi, '&')
+      .replace(/&lt;/gi, '<')
+      .replace(/&gt;/gi, '>')
+      .replace(/&quot;/gi, '"')
+      .replace(/&#39;|&#x27;/gi, "'")
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/&#(\d+);/g, (_m, dec) => {
+        const code = Number(dec);
+        return Number.isFinite(code) && code > 0 && code < 0x10ffff ? String.fromCodePoint(code) : '';
+      })
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function extractMetaContent(html: string, keys: string[]): string {
+    const metaTags = html.match(/<meta\s+[^>]*>/gi) || [];
+    for (const tag of metaTags) {
+      const attrRegex = /([a-zA-Z0-9:_-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+      const attrs: Record<string, string> = {};
+      let m: RegExpExecArray | null;
+      while ((m = attrRegex.exec(tag)) !== null) {
+        attrs[m[1].toLowerCase()] = m[2] ?? m[3] ?? '';
+      }
+      const key = (attrs.property || attrs.name || '').toLowerCase();
+      if (key && keys.includes(key) && attrs.content) {
+        return decodeHtmlEntities(attrs.content);
+      }
+    }
+    return '';
+  }
+
+  app.get('/api/link-preview', async (req, res) => {
+    const rawUrl = typeof req.query.url === 'string' ? req.query.url.trim().slice(0, 600) : '';
+    if (!rawUrl) {
+      return res.status(400).json({ preview: null });
+    }
+
+    const cached = linkPreviewCache.get(rawUrl);
+    if (cached && cached.expiresAt > Date.now()) {
+      return res.json({ preview: cached.data });
+    }
+
+    try {
+      let currentUrl = await validateExternalHttpUrl(rawUrl);
+      if (!currentUrl) {
+        return res.status(400).json({ preview: null });
+      }
+
+      let response: Response | null = null;
+      for (let hop = 0; hop <= 2; hop++) {
+        const resp = await fetch(currentUrl.toString(), {
+          method: 'GET',
+          redirect: 'manual',
+          signal: AbortSignal.timeout(3500),
+          headers: {
+            'User-Agent': 'TurcordBot/1.0 (+https://turcord.app)',
+            Accept: 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.1',
+          },
+        });
+
+        if (resp.status >= 300 && resp.status < 400) {
+          const location = resp.headers.get('location');
+          if (!location || hop === 2) {
+            return res.json({ preview: null });
+          }
+          const nextRaw = new URL(location, currentUrl).toString();
+          const validatedNext = await validateExternalHttpUrl(nextRaw);
+          if (!validatedNext) {
+            return res.status(400).json({ preview: null });
+          }
+          currentUrl = validatedNext;
+          continue;
+        }
+        response = resp;
+        break;
+      }
+
+      if (!response || !response.ok) {
+        return res.json({ preview: null });
+      }
+
+      const contentType = (response.headers.get('content-type') || '').toLowerCase();
+      if (!contentType.includes('text/html') && !contentType.includes('application/xhtml+xml')) {
+        return res.json({ preview: null });
+      }
+
+      const reader = response.body?.getReader();
+      let html = '';
+      if (reader) {
+        const decoder = new TextDecoder();
+        let bytesRead = 0;
+        const maxBytes = 350 * 1024;
+        while (bytesRead < maxBytes) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          bytesRead += value.byteLength;
+          html += decoder.decode(value, { stream: true });
+          if (html.includes('</head>')) break;
+        }
+        reader.cancel().catch(() => {});
+      } else {
+        html = (await response.text()).slice(0, 350 * 1024);
+      }
+
+      const headSlice = html.slice(0, 120000);
+      const titleMatch = headSlice.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+      const rawTitle = extractMetaContent(headSlice, ['og:title', 'twitter:title']) || (titleMatch ? decodeHtmlEntities(titleMatch[1]) : '');
+      const rawDescription = extractMetaContent(headSlice, ['og:description', 'twitter:description', 'description']);
+      const rawImage = extractMetaContent(headSlice, ['og:image', 'twitter:image']);
+      const rawSiteName = extractMetaContent(headSlice, ['og:site_name']) || currentUrl.hostname;
+
+      let safeImage = '';
+      if (rawImage) {
+        try {
+          const resolvedImg = new URL(rawImage, currentUrl);
+          if (resolvedImg.protocol === 'https:' && (await validateExternalHttpUrl(resolvedImg.toString()))) {
+            safeImage = resolvedImg.toString().slice(0, 500);
+          }
+        } catch {
+          safeImage = '';
+        }
+      }
+
+      const preview =
+        rawTitle || rawDescription
+          ? {
+              url: currentUrl.toString(),
+              title: rawTitle.slice(0, 140),
+              description: rawDescription.slice(0, 280),
+              image: safeImage,
+              siteName: rawSiteName.slice(0, 60),
+            }
+          : null;
+
+      if (linkPreviewCache.size >= 200) {
+        const oldestKey = linkPreviewCache.keys().next().value;
+        if (oldestKey) linkPreviewCache.delete(oldestKey);
+      }
+      linkPreviewCache.set(rawUrl, { expiresAt: Date.now() + 10 * 60 * 1000, data: preview });
+
+      return res.json({ preview });
+    } catch {
+      return res.json({ preview: null });
+    }
+  });
+
   app.post('/api/bot/reply', async (req, res) => {
     if (!geminiClient) {
       return res.status(503).json({
@@ -434,7 +646,7 @@ async function startServer() {
             meta.uid = msg.uid;
             meta.displayName = String(msg.displayName || 'Kullanıcı').slice(0, 40);
             meta.username = String(msg.username || 'user').slice(0, 32);
-            meta.avatarUrl = String(msg.avatarUrl || '').slice(0, 1000);
+            meta.avatarUrl = String(msg.avatarUrl || '').slice(0, 12000);
             meta.status = ['online', 'idle', 'dnd', 'offline'].includes(msg.status) ? msg.status : 'online';
 
             if (!userSockets.has(meta.uid)) {
@@ -457,7 +669,7 @@ async function startServer() {
             if (!meta.uid) return;
             meta.status = ['online', 'idle', 'dnd', 'offline'].includes(msg.status) ? msg.status : 'online';
             if (msg.displayName) meta.displayName = String(msg.displayName).slice(0, 40);
-            if (msg.avatarUrl !== undefined) meta.avatarUrl = String(msg.avatarUrl).slice(0, 1000);
+            if (msg.avatarUrl !== undefined) meta.avatarUrl = String(msg.avatarUrl).slice(0, 12000);
             broadcastAll({
               type: 'presence:update',
               uid: meta.uid,
@@ -562,6 +774,24 @@ async function startServer() {
               if (typeof msg.screenSharing === 'boolean') p.screenSharing = msg.screenSharing;
               if (typeof msg.speaking === 'boolean') p.speaking = msg.speaking;
               broadcastRoomParticipants(meta.voiceRoomKey);
+            }
+            break;
+          }
+
+          case 'voice:soundboard': {
+            if (!meta.uid || !meta.voiceRoomKey || typeof msg.soundId !== 'string') return;
+            const soundId = msg.soundId.slice(0, 40);
+            const roomKey = meta.voiceRoomKey;
+            for (const [peerWs, peerMeta] of clients.entries()) {
+              if (peerMeta.voiceRoomKey === roomKey && peerMeta.uid !== meta.uid) {
+                safeSend(peerWs, {
+                  type: 'voice:soundboard',
+                  roomKey,
+                  fromUid: meta.uid,
+                  fromName: meta.displayName || meta.username || 'Üye',
+                  soundId,
+                });
+              }
             }
             break;
           }

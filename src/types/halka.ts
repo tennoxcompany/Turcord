@@ -136,6 +136,9 @@ export interface UserNotification {
   fromAvatar: string;
   channelLabel: string;
   preview: string;
+  serverId?: string;
+  channelId?: string;
+  threadId?: string;
   isRead: boolean;
   createdAt?: Timestamp;
 }
@@ -205,6 +208,7 @@ export interface ChannelDoc {
   position: number;
   slowmodeSeconds?: number;
   nsfw?: boolean;
+  lastMessageAt?: Timestamp;
   createdAt?: Timestamp;
   updatedAt?: Timestamp;
 }
@@ -297,4 +301,35 @@ export interface IncomingCall {
   fromAvatar: string;
   roomKey: string;
   video: boolean;
+}
+
+export interface ServerAuditLog {
+  id: string;
+  serverId: string;
+  action: string;
+  actorId: string;
+  actorName: string;
+  targetName: string;
+  details: string;
+  createdAt?: Timestamp;
+}
+
+export interface ServerBan {
+  uid: string;
+  serverId: string;
+  username: string;
+  displayName: string;
+  avatarUrl: string;
+  reason: string;
+  bannedByUid: string;
+  bannedByName: string;
+  createdAt?: Timestamp;
+}
+
+export interface LinkPreviewData {
+  url: string;
+  title: string;
+  description: string;
+  image: string;
+  siteName: string;
 }

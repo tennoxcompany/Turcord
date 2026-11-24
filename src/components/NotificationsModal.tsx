@@ -21,6 +21,7 @@ interface NotificationsModalProps {
   bookmarks: UserBookmark[];
   onAcceptFriend: (reqId: string) => Promise<void>;
   onDeclineFriend: (reqId: string) => Promise<void>;
+  onNavigateToNotification?: (n: UserNotification) => void;
   onClose: () => void;
 }
 
@@ -31,6 +32,7 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
   bookmarks,
   onAcceptFriend,
   onDeclineFriend,
+  onNavigateToNotification,
   onClose,
 }) => {
   const [tab, setTab] = useState<'activity' | 'bookmarks' | 'prefs'>('activity');
@@ -127,10 +129,21 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
                 ) : notifications.length === 0 ? (
                   <p className="text-xs text-[var(--text-muted)] py-4">Yanıt veya bahsetme bildirimi yok.</p>
                 ) : (
-                  notifications.map((n) => (
+                  notifications.map((n) => {
+                    const hasDeepLink = Boolean((n.serverId && n.channelId) || n.threadId);
+                    return (
                     <div
                       key={n.id}
-                      className={`p-3.5 rounded-2xl border flex items-start justify-between gap-3 ${
+                      onClick={() => {
+                        if (hasDeepLink && onNavigateToNotification) {
+                          if (!n.isRead) void markNotificationRead(profile.uid, n.id);
+                          onNavigateToNotification(n);
+                          onClose();
+                        }
+                      }}
+                      className={`p-3.5 rounded-2xl border flex items-start justify-between gap-3 transition-colors ${
+                        hasDeepLink && onNavigateToNotification ? 'cursor-pointer hover:border-[#5865F2]' : ''
+                      } ${
                         n.isRead
                           ? 'bg-[var(--bg-card)] border-[var(--border-subtle)]'
                           : 'bg-[#5865F2]/10 border-[#5865F2]/40'
@@ -156,9 +169,15 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
                           <p className="text-sm text-[#DBDEE1] break-words pl-2.5 border-l-2 border-[#3F4147]">
                             {n.preview}
                           </p>
+                          {hasDeepLink && onNavigateToNotification && (
+                            <p className="text-[11px] font-medium text-[#949CF7]">Kanala git →</p>
+                          )}
                         </div>
                       </div>
-                      <div className="flex items-center gap-1 shrink-0">
+                      <div
+                        onClick={(e) => e.stopPropagation()}
+                        className="flex items-center gap-1 shrink-0"
+                      >
                         {!n.isRead && (
                           <button
                             onClick={() => markNotificationRead(profile.uid, n.id)}
@@ -177,7 +196,8 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
                         </button>
                       </div>
                     </div>
-                  ))
+                  );
+                  })
                 )}
               </div>
             </>

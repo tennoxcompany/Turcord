@@ -12,6 +12,8 @@ import {
   where,
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
+import { getAudioPrefs, subscribeAudioPrefs, type AudioPreferences } from '../lib/audioPrefs';
+import { playSoundboardEffect } from '../lib/cosmetics';
 import type { IncomingCall, PublicProfile, VoiceParticipant } from '../types/halka';
 
 const ICE_SERVERS: RTCConfiguration = {
@@ -84,6 +86,29 @@ function makeSignalId(): string {
   return `sig_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
+function parseTypingChannelKey(channelKey: string | null): string | null {
+  if (!channelKey) return null;
+  if (channelKey.startsWith('server:') || channelKey.startsWith('ch:')) {
+    const parts = channelKey.split(':');
+    if (parts[1] && parts[2]) {
+      return `servers/${parts[1]}/channels/${parts[2]}/typing`;
+    }
+    return null;
+  }
+  if (channelKey.startsWith('dm:')) {
+    const threadId = channelKey.slice(3);
+    if (threadId) return `dmThreads/${threadId}/typing`;
+  }
+  return null;
+}
+
+export interface SoundboardEvent {
+  uid: string;
+  name: string;
+  soundId: string;
+  ts: number;
+}
+
 function timestampToMs(ts: unknown, fallbackMs: number): number {
   if (ts instanceof Timestamp) return ts.toMillis();
   if (ts && typeof ts === 'object' && 'toMillis' in ts && typeof (ts as Timestamp).toMillis === 'function') {
@@ -118,6 +143,7 @@ export function useRealtimeSocket(
   const [roomParticipants, setRoomParticipants] = useState<VoiceParticipant[]>([]);
   const [typingUsers, setTypingUsers] = useState<Array<{ uid: string; displayName: string }>>([]);
   const [incomingCall, setIncomingCall] = useState<IncomingCall | null>(null);
+  const [activeSoundboardEvent, setActiveSoundboardEvent] = useState<SoundboardEvent | null>(null);
 
   // Local media & WebRTC state
   const [muted, setMuted] = useState(false);
@@ -129,11 +155,17 @@ export function useRealtimeSocket(
   const [remoteStreams, setRemoteStreams] = useState<Record<string, MediaStream>>({});
 
   // Refs to avoid stale closures in async listeners & intervals
+  const wsOpenRef = useRef(false);
   const mutedRef = useRef(false);
   const deafenedRef = useRef(false);
   const cameraOnRef = useRef(false);
   const screenSharingRef = useRef(false);
   const speakingRef = useRef(false);
+
+  const rawMicStreamRef = useRef<MediaStream | null>(null);
+  const micGainCtxRef = useRef<AudioContext | null>(null);
+  const micGainNodeRef = useRef<GainNode | null>(null);
+  const appliedAudioPrefsRef = useRef<AudioPreferences>(getAudioPrefs());
 
   const localAudioStreamRef = useRef<MediaStream | null>(null);
   const localVideoStreamRef = useRef<MediaStream | null>(null);
@@ -150,12 +182,15 @@ export function useRealtimeSocket(
   const speakingTimerRef = useRef<number | null>(null);
   const speakingSyncTimerRef = useRef<number | null>(null);
   const lastSpeakingSyncMsRef = useRef<number>(0);
+  const soundboardToastTimerRef = useRef<number | null>(null);
+  const lastFsTypingWriteMsRef = useRef<number>(0);
 
   // Presence & snapshot caches for staleness pruning
   const fsPresenceDocsRef = useRef<Map<string, StoredPresenceEntry>>(new Map());
   const wsOnlineUsersRef = useRef<Record<string, { status: string; displayName: string; avatarUrl: string }>>({});
   const serverVoiceDocsRef = useRef<StoredVoiceDoc[]>([]);
   const roomVoiceDocsRef = useRef<StoredVoiceDoc[]>([]);
+  const roomParticipantsRef = useRef<VoiceParticipant[]>([]);
   const activeIncomingCallDocIdsRef = useRef<Map<string, string>>(new Map());
   const lastOutgoingRingRef = useRef<{ targetUid: string; callId: string } | null>(null);
 
@@ -165,6 +200,17 @@ export function useRealtimeSocket(
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify(payload));
     }
+  }, []);
+
+  const triggerSoundboardToast = useCallback((uid: string, name: string, soundId: string) => {
+    if (soundboardToastTimerRef.current) {
+      window.clearTimeout(soundboardToastTimerRef.current);
+    }
+    setActiveSoundboardEvent({ uid, name, soundId, ts: Date.now() });
+    soundboardToastTimerRef.current = window.setTimeout(() => {
+      setActiveSoundboardEvent(null);
+      soundboardToastTimerRef.current = null;
+    }, 2500);
   }, []);
 
   const recomputeOnlineUsers = useCallback(() => {
@@ -259,7 +305,12 @@ export function useRealtimeSocket(
   }, []);
 
   const sendSignal = useCallback(
-    async (roomKey: string, targetUid: string, type: 'offer' | 'answer' | 'ice', payloadObj: unknown) => {
+    async (
+      roomKey: string,
+      targetUid: string,
+      type: 'offer' | 'answer' | 'ice' | 'soundboard',
+      payloadObj: unknown
+    ) => {
       const myUid = profileRef.current?.uid;
       if (!myUid) return;
       const parsed = parseVoiceRoomKey(roomKey);
@@ -515,6 +566,70 @@ export function useRealtimeSocket(
     [scheduleSpeakingSync, stopSpeakingDetector]
   );
 
+  const teardownMicPipeline = useCallback(() => {
+    if (micGainCtxRef.current) {
+      micGainCtxRef.current.close().catch(() => {});
+      micGainCtxRef.current = null;
+      micGainNodeRef.current = null;
+    }
+    rawMicStreamRef.current?.getTracks().forEach((t) => t.stop());
+    rawMicStreamRef.current = null;
+  }, []);
+
+  const acquireProcessedMicStream = useCallback(
+    async (prefs: AudioPreferences): Promise<MediaStream> => {
+      teardownMicPipeline();
+      const noiseSuppression = profileRef.current?.noiseSuppression ?? true;
+      let rawStream: MediaStream;
+      try {
+        rawStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            ...(prefs.micId ? { deviceId: { exact: prefs.micId } } : {}),
+            noiseSuppression,
+            echoCancellation: prefs.echoCancellation,
+            autoGainControl: prefs.autoGainControl,
+          },
+          video: false,
+        });
+      } catch {
+        rawStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            noiseSuppression,
+            echoCancellation: prefs.echoCancellation,
+            autoGainControl: prefs.autoGainControl,
+          },
+          video: false,
+        });
+      }
+
+      rawMicStreamRef.current = rawStream;
+      appliedAudioPrefsRef.current = prefs;
+      const enabled = !mutedRef.current && !deafenedRef.current;
+      rawStream.getAudioTracks().forEach((t) => {
+        t.enabled = enabled;
+      });
+
+      try {
+        const ctx = new AudioContext();
+        const src = ctx.createMediaStreamSource(rawStream);
+        const gainNode = ctx.createGain();
+        gainNode.gain.value = Math.max(0, Math.min(2, prefs.inputGain / 100));
+        const dest = ctx.createMediaStreamDestination();
+        src.connect(gainNode);
+        gainNode.connect(dest);
+        micGainCtxRef.current = ctx;
+        micGainNodeRef.current = gainNode;
+        dest.stream.getAudioTracks().forEach((t) => {
+          t.enabled = enabled;
+        });
+        return dest.stream;
+      } catch {
+        return rawStream;
+      }
+    },
+    [teardownMicPipeline]
+  );
+
   const leaveVoice = useCallback(async () => {
     const prevRoom = voiceRoomRef.current;
     const myUid = profileRef.current?.uid;
@@ -523,6 +638,7 @@ export function useRealtimeSocket(
     setActiveVoiceRoomKey(null);
     setActiveVoiceLabel('');
     setRoomParticipants([]);
+    roomParticipantsRef.current = [];
     roomVoiceDocsRef.current = [];
     cameraOnRef.current = false;
     screenSharingRef.current = false;
@@ -530,7 +646,9 @@ export function useRealtimeSocket(
     setCameraOn(false);
     setScreenSharing(false);
     setVoiceError(null);
+    setActiveSoundboardEvent(null);
     stopSpeakingDetector();
+    sendWs({ type: 'voice:leave' });
 
     for (const timer of fallbackOfferTimersRef.current.values()) {
       window.clearTimeout(timer);
@@ -546,6 +664,7 @@ export function useRealtimeSocket(
     localAudioStreamRef.current?.getTracks().forEach((t) => t.stop());
     localVideoStreamRef.current?.getTracks().forEach((t) => t.stop());
     localScreenStreamRef.current?.getTracks().forEach((t) => t.stop());
+    teardownMicPipeline();
     localAudioStreamRef.current = null;
     localVideoStreamRef.current = null;
     localScreenStreamRef.current = null;
@@ -560,7 +679,7 @@ export function useRealtimeSocket(
     if (prevRoom && myUid) {
       await deleteMyVoiceParticipantDoc(prevRoom, myUid);
     }
-  }, [closePeer, deleteMyVoiceParticipantDoc, stopSpeakingDetector]);
+  }, [closePeer, deleteMyVoiceParticipantDoc, sendWs, stopSpeakingDetector, teardownMicPipeline]);
 
   const joinVoice = useCallback(
     async (roomKey: string, label: string, withVideo = false) => {
@@ -572,14 +691,8 @@ export function useRealtimeSocket(
       setVoiceError(null);
 
       try {
-        const noiseSuppression = profileRef.current?.noiseSuppression ?? true;
-        const audioStream = await navigator.mediaDevices.getUserMedia({
-          audio: { noiseSuppression, echoCancellation: true },
-          video: false,
-        });
-        audioStream.getAudioTracks().forEach((t) => {
-          t.enabled = !mutedRef.current && !deafenedRef.current;
-        });
+        const prefs = getAudioPrefs();
+        const audioStream = await acquireProcessedMicStream(prefs);
         localAudioStreamRef.current = audioStream;
         startSpeakingDetector(audioStream);
       } catch {
@@ -606,18 +719,23 @@ export function useRealtimeSocket(
       processedSignalIdsRef.current.clear();
       setActiveVoiceRoomKey(roomKey);
       setActiveVoiceLabel(label);
+      sendWs({ type: 'voice:join', roomKey });
 
       await syncMyVoiceParticipantDoc(roomKey);
     },
-    [leaveVoice, rebuildLocalDisplayStream, startSpeakingDetector, syncMyVoiceParticipantDoc]
+    [acquireProcessedMicStream, leaveVoice, rebuildLocalDisplayStream, sendWs, startSpeakingDetector, syncMyVoiceParticipantDoc]
   );
 
   const toggleMute = useCallback(() => {
     const next = !mutedRef.current;
     mutedRef.current = next;
     setMuted(next);
+    const enabled = !next && !deafenedRef.current;
     localAudioStreamRef.current?.getAudioTracks().forEach((t) => {
-      t.enabled = !next && !deafenedRef.current;
+      t.enabled = enabled;
+    });
+    rawMicStreamRef.current?.getAudioTracks().forEach((t) => {
+      t.enabled = enabled;
     });
     if (next) {
       speakingRef.current = false;
@@ -631,8 +749,12 @@ export function useRealtimeSocket(
     const next = !deafenedRef.current;
     deafenedRef.current = next;
     setDeafened(next);
+    const enabled = !next && !mutedRef.current;
     localAudioStreamRef.current?.getAudioTracks().forEach((t) => {
-      t.enabled = !next && !mutedRef.current;
+      t.enabled = enabled;
+    });
+    rawMicStreamRef.current?.getAudioTracks().forEach((t) => {
+      t.enabled = enabled;
     });
     if (next) {
       speakingRef.current = false;
@@ -759,9 +881,56 @@ export function useRealtimeSocket(
     }
   }, [leaveVoice]);
 
+  const broadcastSoundboard = useCallback(
+    (soundId: string) => {
+      const p = profileRef.current;
+      const roomKey = voiceRoomRef.current;
+      if (!p || !roomKey) return;
+
+      if (!deafenedRef.current) {
+        playSoundboardEffect(soundId);
+      }
+      triggerSoundboardToast(p.uid, p.displayName || p.username || 'Sen', soundId);
+
+      if (wsOpenRef.current) {
+        sendWs({ type: 'voice:soundboard', soundId });
+        return;
+      }
+
+      const others = roomParticipantsRef.current.filter((part) => part.uid && part.uid !== p.uid);
+      for (const peer of others) {
+        void sendSignal(roomKey, peer.uid, 'soundboard', {
+          soundId,
+          fromName: p.displayName || p.username || 'Üye',
+        });
+      }
+    },
+    [sendSignal, sendWs, triggerSoundboardToast]
+  );
+
   const sendTyping = useCallback(
     (channelKey: string, isTyping: boolean) => {
-      sendWs({ type: isTyping ? 'typing:start' : 'typing:stop', channelKey });
+      if (wsOpenRef.current) {
+        sendWs({ type: isTyping ? 'typing:start' : 'typing:stop', channelKey });
+        return;
+      }
+      const p = profileRef.current;
+      const typingPath = parseTypingChannelKey(channelKey);
+      if (!p?.uid || !typingPath) return;
+
+      if (!isTyping) {
+        lastFsTypingWriteMsRef.current = 0;
+        void deleteDoc(doc(db, typingPath, p.uid)).catch(() => {});
+        return;
+      }
+      const now = Date.now();
+      if (now - lastFsTypingWriteMsRef.current < 2400) return;
+      lastFsTypingWriteMsRef.current = now;
+      void setDoc(doc(db, typingPath, p.uid), {
+        uid: p.uid,
+        displayName: (p.displayName || p.username || 'Üye').slice(0, 40),
+        updatedAt: serverTimestamp(),
+      }).catch(() => {});
     },
     [sendWs]
   );
@@ -1010,6 +1179,7 @@ export function useRealtimeSocket(
         .filter((item) => now - item.updatedMs <= VOICE_STALE_MS)
         .map((item) => item.participant)
         .sort((a, b) => a.uid.localeCompare(b.uid));
+      roomParticipantsRef.current = activeList;
       setRoomParticipants(activeList);
       syncPeersWithList(activeList);
     };
@@ -1068,12 +1238,12 @@ export function useRealtimeSocket(
         if (voiceRoomRef.current !== roomKey) return;
 
         // Sort so offer/answer are processed before ice within the same snapshot batch
-        const typeOrder: Record<string, number> = { offer: 0, answer: 1, ice: 2 };
+        const typeOrder: Record<string, number> = { offer: 0, answer: 1, ice: 2, soundboard: 3 };
         const sortedDocs = [...snap.docs].sort((a, b) => {
           const da = a.data();
           const dbData = b.data();
-          const oa = typeOrder[da.type] ?? 3;
-          const ob = typeOrder[dbData.type] ?? 3;
+          const oa = typeOrder[da.type] ?? 4;
+          const ob = typeOrder[dbData.type] ?? 4;
           if (oa !== ob) return oa - ob;
           return timestampToMs(da.createdAt, 0) - timestampToMs(dbData.createdAt, 0);
         });
@@ -1154,6 +1324,15 @@ export function useRealtimeSocket(
               } else {
                 await pc.addIceCandidate(new RTCIceCandidate(candidateInit)).catch(() => {});
               }
+            } else if (sig.type === 'soundboard') {
+              const soundId = String(payload.soundId || '');
+              const fromName = String(payload.fromName || 'Üye');
+              if (soundId) {
+                if (!deafenedRef.current) {
+                  playSoundboardEffect(soundId);
+                }
+                triggerSoundboardToast(fromUid, fromName, soundId);
+              }
             }
           } catch (err) {
             console.warn('WebRTC signal handling error:', err);
@@ -1205,6 +1384,7 @@ export function useRealtimeSocket(
       ws.onopen = () => {
         openedOnce = true;
         failedAttempts = 0;
+        wsOpenRef.current = true;
         setWsOpen(true);
         const p = profileRef.current;
         if (p) {
@@ -1221,6 +1401,9 @@ export function useRealtimeSocket(
         }
         if (channelKeyRef.current) {
           ws.send(JSON.stringify({ type: 'channel:focus', channelKey: channelKeyRef.current }));
+        }
+        if (voiceRoomRef.current) {
+          ws.send(JSON.stringify({ type: 'voice:join', roomKey: voiceRoomRef.current }));
         }
       };
 
@@ -1250,6 +1433,18 @@ export function useRealtimeSocket(
                 );
               }
               break;
+            case 'voice:soundboard':
+              if (msg.roomKey === voiceRoomRef.current && msg.fromUid !== profileRef.current?.uid) {
+                const soundId = String(msg.soundId || '');
+                const fromName = String(msg.fromName || 'Üye');
+                if (soundId) {
+                  if (!deafenedRef.current) {
+                    playSoundboardEffect(soundId);
+                  }
+                  triggerSoundboardToast(String(msg.fromUid || ''), fromName, soundId);
+                }
+              }
+              break;
           }
         } catch {
           // Ignore malformed WS packets
@@ -1257,6 +1452,7 @@ export function useRealtimeSocket(
       };
 
       ws.onclose = () => {
+        wsOpenRef.current = false;
         setWsOpen(false);
         failedAttempts += 1;
         if (!unmounted && (openedOnce || failedAttempts < 3)) {
@@ -1272,9 +1468,49 @@ export function useRealtimeSocket(
       if (reconnectTimerRef.current) window.clearTimeout(reconnectTimerRef.current);
       wsRef.current?.close();
       wsRef.current = null;
+      wsOpenRef.current = false;
       setWsOpen(false);
     };
-  }, [profile?.uid, recomputeOnlineUsers]);
+  }, [profile?.uid, recomputeOnlineUsers, triggerSoundboardToast]);
+
+  // 6. Live Audio Preferences Sync (inputGain + hot mic device / AEC / AGC switching)
+  useEffect(() => {
+    return subscribeAudioPrefs(async (next) => {
+      if (micGainNodeRef.current) {
+        micGainNodeRef.current.gain.value = Math.max(0, Math.min(2, next.inputGain / 100));
+      }
+      const prev = appliedAudioPrefsRef.current;
+      const needsReacquire =
+        voiceRoomRef.current &&
+        (prev.micId !== next.micId ||
+          prev.echoCancellation !== next.echoCancellation ||
+          prev.autoGainControl !== next.autoGainControl);
+
+      appliedAudioPrefsRef.current = next;
+
+      if (needsReacquire) {
+        try {
+          const oldStream = localAudioStreamRef.current;
+          const newStream = await acquireProcessedMicStream(next);
+          localAudioStreamRef.current = newStream;
+          const newTrack = newStream.getAudioTracks()[0] || null;
+          if (newTrack) {
+            for (const pc of peersRef.current.values()) {
+              const sender = pc.getSenders().find((s) => s.track?.kind === 'audio');
+              if (sender) {
+                await sender.replaceTrack(newTrack).catch(() => {});
+              }
+            }
+          }
+          startSpeakingDetector(newStream);
+          rebuildLocalDisplayStream();
+          oldStream?.getTracks().forEach((t) => t.stop());
+        } catch {
+          // Ignore live device switch failure
+        }
+      }
+    });
+  }, [acquireProcessedMicStream, rebuildLocalDisplayStream, startSpeakingDetector]);
 
   // Sync profile updates to WS
   useEffect(() => {
@@ -1287,13 +1523,56 @@ export function useRealtimeSocket(
     });
   }, [profile?.status, profile?.displayName, profile?.avatarUrl, wsOpen, sendWs]);
 
-  // Focus active text channel / DM for typing indicators
+  // Focus active text channel / DM for typing indicators + Firestore fallback when WS is offline
   useEffect(() => {
     setTypingUsers([]);
     if (wsOpen) {
       sendWs({ type: 'channel:focus', channelKey: activeChannelKey });
+      return;
     }
-  }, [activeChannelKey, wsOpen, sendWs]);
+
+    const myUid = profile?.uid;
+    const typingPath = parseTypingChannelKey(activeChannelKey);
+    if (!myUid || !typingPath) return;
+
+    let cachedTypers: Array<{ uid: string; displayName: string; updatedMs: number }> = [];
+
+    const recomputeTypers = () => {
+      const now = Date.now();
+      setTypingUsers(
+        cachedTypers
+          .filter((t) => t.uid !== myUid && now - t.updatedMs < 6500)
+          .map(({ uid, displayName }) => ({ uid, displayName }))
+      );
+    };
+
+    const unsub = onSnapshot(
+      collection(db, typingPath),
+      (snap) => {
+        const now = Date.now();
+        cachedTypers = snap.docs.map((d) => {
+          const data = d.data();
+          return {
+            uid: String(data.uid || d.id),
+            displayName: String(data.displayName || 'Üye'),
+            updatedMs: timestampToMs(data.updatedAt, now),
+          };
+        });
+        recomputeTypers();
+      },
+      () => {
+        // Ignore transient typing listener permissions on channel switches
+      }
+    );
+
+    const pruneTimer = window.setInterval(recomputeTypers, 2000);
+
+    return () => {
+      unsub();
+      window.clearInterval(pruneTimer);
+      void deleteDoc(doc(db, typingPath, myUid)).catch(() => {});
+    };
+  }, [activeChannelKey, profile?.uid, wsOpen, sendWs]);
 
   return {
     wsConnected,
@@ -1305,6 +1584,7 @@ export function useRealtimeSocket(
     typingUsers,
     incomingCall,
     setIncomingCall,
+    activeSoundboardEvent,
     muted,
     deafened,
     cameraOn,
@@ -1322,6 +1602,7 @@ export function useRealtimeSocket(
     declineCall,
     clearIncomingCallDoc,
     cleanupForSignOut,
+    broadcastSoundboard,
     sendTyping,
   };
 }

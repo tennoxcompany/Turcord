@@ -7,6 +7,7 @@ import {
   Clock,
   Hash,
   ImagePlus,
+  Lock,
   Megaphone,
   Phone,
   Pin,
@@ -17,6 +18,7 @@ import {
   Smile,
   Sparkles,
   Star,
+  Upload,
   Users,
   Video,
   X,
@@ -63,6 +65,7 @@ interface ChatAreaProps {
   currentUserDecoration?: AvatarDecorationId;
   messages: ChatMessage[];
   currentUid: string;
+  currentUsername?: string;
   canModerate: boolean;
   canPin: boolean;
   serverEmojis?: ServerEmoji[];
@@ -152,6 +155,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   currentUserDecoration,
   messages,
   currentUid,
+  currentUsername,
   canModerate,
   canPin,
   serverEmojis = [],
@@ -198,6 +202,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [gifUrlError, setGifUrlError] = useState<string | null>(null);
   const [slashIndex, setSlashIndex] = useState(0);
   const [emojiAutoIndex, setEmojiAutoIndex] = useState(0);
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const [dragActive, setDragActive] = useState(false);
 
   // Poll Creator
   const [pollOpen, setPollOpen] = useState(false);
@@ -315,6 +321,40 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     return list.length > 0 ? { query: m[1], list } : null;
   }, [serverEmojis, text]);
 
+  const mentionMatch = useMemo(() => {
+    if (mode !== 'channel' || members.length === 0) return null;
+    const m = /(?:^|\s)@([a-z0-9_.]{0,24})$/i.exec(text);
+    if (!m) return null;
+    const needle = m[1].toLowerCase();
+    const items: Array<{ uid: string; username: string; displayName: string; avatarUrl: string; isEveryone?: boolean }> = [];
+    if (canModerate && (!needle || 'everyone'.startsWith(needle))) {
+      items.push({
+        uid: '__everyone__',
+        username: 'everyone',
+        displayName: 'everyone — Tüm sunucu üyelerine bildirim',
+        avatarUrl: '',
+        isEveryone: true,
+      });
+    }
+    for (const mem of members) {
+      if (mem.uid === currentUid) continue;
+      if (
+        !needle ||
+        mem.username.toLowerCase().includes(needle) ||
+        mem.displayName.toLowerCase().includes(needle)
+      ) {
+        items.push({
+          uid: mem.uid,
+          username: mem.username,
+          displayName: mem.displayName,
+          avatarUrl: mem.avatarUrl,
+        });
+      }
+      if (items.length >= 7) break;
+    }
+    return items.length > 0 ? { query: m[1], items } : null;
+  }, [mode, members, text, canModerate, currentUid]);
+
   const displayedGifs = useMemo(() => {
     if (gifCategory === 'Favoriler') {
       const q = gifQuery.trim().toLowerCase();
@@ -344,6 +384,10 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     setEmojiAutoIndex(0);
   }, [emojiShortcodeMatch?.list.length, text]);
 
+  useEffect(() => {
+    setMentionIndex(0);
+  }, [mentionMatch?.items.length, text]);
+
   const handleSelectSlashCommand = (usage: string) => {
     setText(usage);
     inputRef.current?.focus();
@@ -351,6 +395,11 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
   const handleSelectAutocompleteEmoji = (emojiName: string) => {
     setText((prev) => prev.replace(/:([a-z0-9_]{1,24})$/i, `:${emojiName}: `));
+    inputRef.current?.focus();
+  };
+
+  const handleSelectMention = (username: string) => {
+    setText((prev) => prev.replace(/@([a-z0-9_.]{0,24})$/i, `@${username} `));
     inputRef.current?.focus();
   };
 
@@ -461,9 +510,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     }
   };
 
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const processImageFile = async (file: File) => {
     setUploadError(null);
     try {
       const compressed = await compressImageToDataUrl(file);
@@ -472,11 +519,59 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         return;
       }
       setAttachmentUrl(compressed);
-      setAttachmentName(file.name);
+      setAttachmentName(file.name || 'yapistirilan-gorsel.webp');
     } catch {
       setUploadError('Görsel işlenemedi.');
-    } finally {
-      e.target.value = '';
+    }
+  };
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    await processImageFile(file);
+    e.target.value = '';
+  };
+
+  const handlePaste = async (e: React.ClipboardEvent<HTMLInputElement>) => {
+    if (isAnnouncementLocked) return;
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.type.startsWith('image/')) {
+        const file = item.getAsFile();
+        if (file) {
+          e.preventDefault();
+          await processImageFile(file);
+          return;
+        }
+      }
+    }
+  };
+
+  const isAnnouncementLocked =
+    mode === 'channel' && channelType === 'announcement' && !canModerate;
+
+  const handleDragOver = (e: React.DragEvent) => {
+    if (isAnnouncementLocked) return;
+    if (e.dataTransfer?.types?.includes('Files')) {
+      e.preventDefault();
+      if (!dragActive) setDragActive(true);
+    }
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+    setDragActive(false);
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragActive(false);
+    if (isAnnouncementLocked) return;
+    const file = Array.from(e.dataTransfer.files || []).find((f) => f.type.startsWith('image/'));
+    if (file) {
+      await processImageFile(file);
     }
   };
 
@@ -492,7 +587,19 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   };
 
   return (
-    <div className="flex-1 flex flex-col min-w-0 min-h-0 h-full overflow-hidden bg-[var(--bg-surface)]">
+    <div
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={(e) => void handleDrop(e)}
+      className="relative flex-1 flex flex-col min-w-0 min-h-0 h-full overflow-hidden bg-[var(--bg-surface)]"
+    >
+      {dragActive && (
+        <div className="absolute inset-0 z-40 bg-[#5865F2]/20 backdrop-blur-[2px] border-2 border-dashed border-[#5865F2] m-3 rounded-2xl flex flex-col items-center justify-center gap-2 pointer-events-none">
+          <Upload className="w-10 h-10 text-white" />
+          <p className="font-display font-semibold text-base text-white">Görseli buraya bırak</p>
+          <p className="text-xs text-[#E0E7FF]">#{title} sohbetine ek olarak yüklenecek</p>
+        </div>
+      )}
       {/* Top Bar */}
       <header className="h-12 shrink-0 px-4 border-b border-[var(--border-subtle)] flex items-center justify-between gap-4">
         <div className="flex items-center gap-2.5 min-w-0">
@@ -703,6 +810,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               grouped={isGrouped(idx)}
               compactMode={compactMode}
               currentUid={currentUid}
+              currentUsername={currentUsername}
               canModerate={canModerate}
               canPin={canPin}
               serverEmojis={serverEmojis}
@@ -792,6 +900,49 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           </div>
         )}
 
+        {/* @mention Autocomplete Popup */}
+        {!activeSlashMatches.length && !emojiShortcodeMatch && mentionMatch && !isAnnouncementLocked && (
+          <div className="mb-2 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-subtle)] shadow-2xl overflow-hidden z-30">
+            <div className="px-3.5 py-1.5 border-b border-[var(--border-subtle)] flex items-center justify-between text-[11px] font-semibold text-[var(--text-muted)] uppercase">
+              <span>Üye Bahsetme</span>
+              <span>↑↓ Seç · Tab Ekle</span>
+            </div>
+            <div className="max-h-56 overflow-y-auto divide-y divide-[var(--border-subtle)]/40">
+              {mentionMatch.items.map((item, idx) => {
+                const selected = idx === mentionIndex;
+                return (
+                  <button
+                    key={item.uid}
+                    type="button"
+                    onClick={() => handleSelectMention(item.username)}
+                    className={`w-full flex items-center justify-between gap-3 px-3.5 py-2 text-left transition-colors cursor-pointer ${
+                      selected ? 'bg-[#5865F2]/20' : 'hover:bg-[var(--bg-hover)]'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      {item.isEveryone ? (
+                        <div className="w-6 h-6 rounded-full bg-[#F0B232]/20 text-[#F0B232] flex items-center justify-center text-xs font-bold shrink-0">
+                          @
+                        </div>
+                      ) : (
+                        <Avatar src={item.avatarUrl} name={item.displayName} size="xs" />
+                      )}
+                      <div className="min-w-0">
+                        <span className="text-sm font-medium text-white truncate block">
+                          {item.displayName}
+                        </span>
+                      </div>
+                    </div>
+                    <span className="text-[11px] font-mono text-[var(--text-muted)] shrink-0">
+                      @{item.username}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {uploadError && (
           <div className="flex items-center justify-between px-3 py-1.5 mb-1.5 rounded-lg bg-rose-500/15 border border-rose-500/30 text-xs text-rose-300">
             <span>{uploadError}</span>
@@ -836,6 +987,12 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           </div>
         )}
 
+        {isAnnouncementLocked ? (
+          <div className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] text-xs text-[var(--text-muted)]">
+            <Lock className="w-4 h-4 shrink-0 text-[#F0B232]" />
+            <span>Duyuru kanalına yalnızca yöneticiler ve moderatörler mesaj gönderebilir.</span>
+          </div>
+        ) : (
         <form
           onSubmit={handleSubmit}
           className={`relative flex items-center gap-2 px-3 py-2.5 bg-[var(--bg-input)] border border-[var(--border-subtle)] ${
@@ -863,6 +1020,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             type="text"
             value={text}
             onChange={(e) => handleInputChange(e.target.value)}
+            onPaste={(e) => void handlePaste(e)}
             onKeyDown={(e) => {
               if (activeSlashMatches.length > 0) {
                 if (e.key === 'ArrowDown') {
@@ -902,6 +1060,26 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   return;
                 }
               }
+              if (mentionMatch && mentionMatch.items.length > 0) {
+                if (e.key === 'ArrowDown') {
+                  e.preventDefault();
+                  setMentionIndex((i) => (i + 1) % mentionMatch.items.length);
+                  return;
+                }
+                if (e.key === 'ArrowUp') {
+                  e.preventDefault();
+                  setMentionIndex(
+                    (i) => (i - 1 + mentionMatch.items.length) % mentionMatch.items.length
+                  );
+                  return;
+                }
+                if (e.key === 'Tab') {
+                  e.preventDefault();
+                  const chosen = mentionMatch.items[mentionIndex];
+                  if (chosen) handleSelectMention(chosen.username);
+                  return;
+                }
+              }
             }}
             placeholder={
               cooldownLeft > 0
@@ -911,8 +1089,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 : mode === 'dm'
                 ? `${title} sohbetine mesaj gönder`
                 : enableSlashCommands
-                ? `#${title} kanalına mesaj veya /komut yaz`
-                : `#${title} kanalına mesaj gönder`
+                ? `#${title} kanalına mesaj, @etiket veya /komut yaz`
+                : `#${title} kanalına mesaj veya @etiket yaz`
             }
             maxLength={2000}
             className="flex-1 bg-transparent text-[15px] text-[var(--text-primary)] placeholder-[var(--text-muted)] outline-none min-w-0"
@@ -1306,6 +1484,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             )}
           </button>
         </form>
+        )}
 
         {/* Live Typing & Bot Thinking Indicator */}
         <div className="h-5 mt-1 px-1 flex items-center text-xs text-[var(--text-secondary)] gap-2">
